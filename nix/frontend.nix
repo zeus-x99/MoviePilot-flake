@@ -46,6 +46,7 @@ stdenv.mkDerivation {
     runHook preInstall
     mkdir -p "$out/share/moviepilot/frontend"
     cp -r dist "$out/share/moviepilot/frontend/"
+    cp -r node_modules "$out/share/moviepilot/frontend/"
     runHook postInstall
   '';
 }

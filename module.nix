@@ -32,7 +32,11 @@ let
     PORT = toString cfg.backend.port;
     NGINX_PORT = toString cfg.frontend.port;
     TZ = cfg.timeZone;
-    PLAYWRIGHT_BROWSERS_PATH = "${cfg.playwrightPackage.browsers}";
+    PLAYWRIGHT_BROWSERS_PATH =
+      if builtins.hasAttr "browsers-chromium" cfg.playwrightPackage then
+        "${cfg.playwrightPackage."browsers-chromium"}"
+      else
+        "${cfg.playwrightPackage.browsers}";
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
     PYTHONNOUSERSITE = "1";
     PYTHONPATH = "${runtimeDir}/backend";
@@ -174,8 +178,8 @@ in
       ];
       serviceConfig = {
         Type = "oneshot";
-        User = cfg.user;
-        Group = cfg.group;
+        User = "root";
+        Group = "root";
         UMask = "0027";
       } // optionalAttrs (cfg.environmentFile != null) {
         EnvironmentFile = cfg.environmentFile;
@@ -193,11 +197,15 @@ in
           --exclude 'app/helper/' \
           "$pkg_dir/backend/" "$runtime_dir/backend/"
 
+        chmod -R u+w "$runtime_dir/backend"
         install -d -m 0750 "$runtime_dir/backend/app/plugins" "$runtime_dir/backend/app/helper"
 
         rsync -a "$pkg_dir/backend/app/plugins/" "$runtime_dir/backend/app/plugins/"
         rsync -a "$pkg_dir/backend/app/helper/" "$runtime_dir/backend/app/helper/"
         rsync -a --delete "$pkg_dir/frontend/" "$runtime_dir/frontend/"
+
+        chown -R ${cfg.user}:${cfg.group} "$runtime_dir"
+        chmod -R u+rwX,go-rwx "$runtime_dir"
       '';
     };
 
