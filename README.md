@@ -42,6 +42,10 @@ NixOS module 启动时只会把 `moviepilot-runtime` 从 Nix store 同步到 `${
 
 - `flake.nix`
   flake 输入、包定义、module 导出、同步脚本 app
+- `examples/flake.nix`
+  一个可直接参考的宿主机 flake 示例
+- `examples/moviepilot.env.example`
+  最小环境变量示例
 - `module.nix`
   `services.moviepilot` 的 NixOS module
 - `nix/python-packages.nix`
@@ -98,6 +102,23 @@ TMDB_API_KEY=replace-me
 PROXY_HOST=
 ```
 
+仓库里也附带了现成示例：
+
+- `examples/flake.nix`
+- `examples/moviepilot.env.example`
+
+如果你已经有自己的系统 flake，最小接入只需要两步：
+
+1. 在 `inputs` 里加入 `moviepilotFlake.url = "github:zeus-x99/MoviePilot-flake";`
+2. 在对应主机的 `modules` 里加入 `moviepilotFlake.nixosModules.default`
+
+然后执行：
+
+```bash
+sudo nixos-rebuild dry-activate --flake .#YOUR_HOST
+sudo nixos-rebuild switch --flake .#YOUR_HOST
+```
+
 ## NixOS 选项
 
 - `services.moviepilot.enable`
@@ -124,9 +145,17 @@ PROXY_HOST=
 建议顺序：
 
 ```bash
-nix flake check
+nix build .#packages.x86_64-linux.moviepilot-python --no-link
+nix build .#packages.x86_64-linux.moviepilot-runtime --no-link
+nix eval .#checks.x86_64-linux.module-eval.drvPath
 sudo nixos-rebuild dry-activate --flake .#YOUR_HOST
 sudo nixos-rebuild switch --flake .#YOUR_HOST
+```
+
+如果你要做完整校验，再补一轮：
+
+```bash
+nix flake check
 ```
 
 查看日志：
