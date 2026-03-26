@@ -202,7 +202,11 @@ py.overrideScope (final: prev:
     "langgraph-checkpoint-sqlite" = disableChecks prev."langgraph-checkpoint-sqlite";
     "langgraph-prebuilt" = disableChecks prev."langgraph-prebuilt";
     langsmith = disableChecks prev.langsmith;
-    pymediainfo = disableChecks prev.pymediainfo;
+    pymediainfo = prev.pymediainfo.overridePythonAttrs (old: {
+      patches = (old.patches or [ ]) ++ [
+        ./patches/pymediainfo-filelike-track-compat.patch
+      ];
+    });
     sanic = disableChecks prev.sanic;
     "slack-bolt" = disableChecks prev."slack-bolt";
     spacy = disableChecks prev.spacy;
