@@ -49,19 +49,27 @@ jobs:
 
       - name: Run update-upstream
         env:
+          EVENT_NAME: ${{ github.event_name }}
           COMPONENTS: ${{ github.event.inputs.components }}
-          CHECK_MODE: ${{ github.event.inputs.check_mode || 'quick' }}
+          CHECK_MODE_INPUT: ${{ github.event.inputs.check_mode }}
         run: |
           set -euo pipefail
 
           args=()
+          check_mode="quick"
+
+          if [[ "${EVENT_NAME}" == "schedule" ]]; then
+            check_mode="skip"
+          elif [[ -n "${CHECK_MODE_INPUT:-}" ]]; then
+            check_mode="${CHECK_MODE_INPUT}"
+          fi
 
           if [[ -n "${COMPONENTS}" ]]; then
             read -r -a component_args <<<"${COMPONENTS}"
             args+=("${component_args[@]}")
           fi
 
-          case "${CHECK_MODE}" in
+          case "${check_mode}" in
             quick)
               ;;
             full)
@@ -71,7 +79,7 @@ jobs:
               args+=(--skip-check)
               ;;
             *)
-              echo "未知校验模式: ${CHECK_MODE}" >&2
+              echo "未知校验模式: ${check_mode}" >&2
               exit 1
               ;;
           esac
@@ -96,6 +104,6 @@ jobs:
             - 仅提交 `flake.lock` 与 `nix/sources.nix`
 
             触发方式：`${{ github.event_name }}`
-            校验模式：`${{ github.event.inputs.check_mode || 'quick' }}`
+            校验模式：`${{ github.event_name == 'schedule' && 'skip' || github.event.inputs.check_mode || 'quick' }}`
             组件参数：`${{ github.event.inputs.components || '全部' }}`
           delete-branch: true

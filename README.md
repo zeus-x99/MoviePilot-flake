@@ -311,7 +311,7 @@ nix flake lock --update-input moviepilotResourcesSrc
 - `.github/workflows/ci.yml`
   在 `push`、`pull_request`、手动触发时执行 `nix flake check -L --accept-flake-config`
 - `.github/workflows/update-upstream.yml`
-  每周一 `03:17 UTC` 自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；也支持手动触发，并可传组件列表和校验模式
+  每 4 小时自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；定时任务默认跳过重校验，验证交给 PR 上的 `CI`，手动触发时仍可传组件列表和校验模式
 
 如果你要让自动 PR 正常工作，需要在 GitHub 仓库里打开：
 
