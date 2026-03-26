@@ -1,0 +1,101 @@
+name: Update Upstream
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      components:
+        description: "空格分隔的组件列表；留空时更新全部"
+        required: false
+        default: "backend frontend plugins resources"
+        type: string
+      check_mode:
+        description: "同步后的校验模式"
+        required: true
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+          - skip
+
+concurrency:
+  group: update-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  update-upstream:
+    name: Update Upstream Inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Run update-upstream
+        env:
+          COMPONENTS: ${{ github.event.inputs.components }}
+          CHECK_MODE: ${{ github.event.inputs.check_mode || 'quick' }}
+        run: |
+          set -euo pipefail
+
+          args=()
+
+          if [[ -n "${COMPONENTS}" ]]; then
+            read -r -a component_args <<<"${COMPONENTS}"
+            args+=("${component_args[@]}")
+          fi
+
+          case "${CHECK_MODE}" in
+            quick)
+              ;;
+            full)
+              args+=(--full-check)
+              ;;
+            skip)
+              args+=(--skip-check)
+              ;;
+            *)
+              echo "未知校验模式: ${CHECK_MODE}" >&2
+              exit 1
+              ;;
+          esac
+
+          nix run .#update-upstream -- "${args[@]}"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          add-paths: |
+            flake.lock
+            nix/sources.nix
+          branch: automation/update-upstream
+          commit-message: "chore: update MoviePilot upstream inputs"
+          title: "chore: update MoviePilot upstream inputs"
+          body: |
+            自动更新 MoviePilot 上游锁定版本。
+
+            本次 workflow 会：
+            - 更新 flake inputs 中锁定的上游 revision
+            - 在前端变更时刷新 `nix/sources.nix` 里的 `frontendYarnHash`
+            - 仅提交 `flake.lock` 与 `nix/sources.nix`
+
+            触发方式：`${{ github.event_name }}`
+            校验模式：`${{ github.event.inputs.check_mode || 'quick' }}`
+            组件参数：`${{ github.event.inputs.components || '全部' }}`
+          delete-branch: true

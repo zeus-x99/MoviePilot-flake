@@ -304,6 +304,35 @@ nix flake lock --update-input moviepilotPluginsSrc
 nix flake lock --update-input moviepilotResourcesSrc
 ```
 
+## GitHub Actions
+
+仓库现在附带两套工作流：
+
+- `.github/workflows/ci.yml`
+  在 `push`、`pull_request`、手动触发时执行 `nix flake check -L --accept-flake-config`
+- `.github/workflows/update-upstream.yml`
+  每周一 `03:17 UTC` 自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；也支持手动触发，并可传组件列表和校验模式
+
+如果你要让自动 PR 正常工作，需要在 GitHub 仓库里打开：
+
+1. `Settings -> Actions -> General -> Workflow permissions`
+2. 选择 `Read and write permissions`
+3. 勾选 `Allow GitHub Actions to create and approve pull requests`
+
+手动触发 `Update Upstream` 时：
+
+- `components`
+  传空格分隔的组件列表，例如 `backend frontend`
+- `check_mode`
+  可选 `quick`、`full`、`skip`
+
+推荐用法：
+
+- 平时靠定时任务自动开 PR
+- PR 上由 `CI` 跑完整 `flake check`
+- 你只在 PR 里 review `flake.lock` / `nix/sources.nix`
+- 如果上游打破了打包，再在 PR 分支里补 Nix 修复
+
 ## 限制
 
 - 基础运行环境已经是纯 Nix 构建；为了保持这个前提，module 默认会禁用资源自更新，并显式禁止运行时插件 `pip install`。
