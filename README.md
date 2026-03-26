@@ -312,6 +312,8 @@ nix flake lock --update-input moviepilotResourcesSrc
   在 `push`、`pull_request`、手动触发时执行轻量校验：module/example eval、`update-upstream` 脚本检查，以及 `moviepilot-python` / `moviepilot-runtime` 构建
 - `.github/workflows/update-upstream.yml`
   每 4 小时自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；定时任务默认跳过重校验，验证交给 PR 上的 `CI`，手动触发时仍可传组件列表和校验模式
+- `.github/workflows/auto-merge-upstream.yml`
+  当 `automation/update-upstream` 这条 PR 的 `CI` 成功后，自动 squash merge 并删除分支
 
 如果你要让自动 PR 正常工作，需要在 GitHub 仓库里打开：
 
@@ -325,7 +327,7 @@ nix flake lock --update-input moviepilotResourcesSrc
 - 内容：你自己的 GitHub PAT
 - 最少需要 `repo` 和 `workflow` 权限
 
-没有这个 secret 时，工作流仍然会正常开 PR，只是 GitHub 的默认 `GITHUB_TOKEN` 创建的 PR 不会再触发新的 workflow run。
+没有这个 secret 时，工作流仍然会正常开 PR，只是 GitHub 的默认 `GITHUB_TOKEN` 创建的 PR 不会再触发新的 workflow run，也无法形成“自动开 PR -> 自动跑 CI -> 自动合并”的闭环。
 
 手动触发 `Update Upstream` 时：
 
