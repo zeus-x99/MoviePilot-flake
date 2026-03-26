@@ -128,18 +128,83 @@ jobs:
             echo "resources_rev=$(short_rev "${resources_rev}")"
           } >>"${GITHUB_OUTPUT}"
 
-      - name: Create pull request
-        uses: peter-evans/create-pull-request@v8
-        with:
-          add-paths: |
-            flake.lock
-            nix/sources.nix
-          branch: automation/update-upstream
-          commit-message: "chore: update MoviePilot upstream inputs"
-          title: "chore: MoviePilot ${{ steps.before.outputs.backend_version }} -> ${{ steps.after.outputs.backend_version }}"
-          token: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
-          body: |
-            - frontend: ${{ steps.before.outputs.frontend_rev }} -> ${{ steps.after.outputs.frontend_rev }}
-            - plugins: ${{ steps.before.outputs.plugins_rev }} -> ${{ steps.after.outputs.plugins_rev }}
-            - resources: ${{ steps.before.outputs.resources_rev }} -> ${{ steps.after.outputs.resources_rev }}
-          delete-branch: true
+      - name: Create or update pull request
+        env:
+          GH_TOKEN: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
+          PR_TITLE: "chore: MoviePilot ${{ steps.before.outputs.backend_version }} -> ${{ steps.after.outputs.backend_version }}"
+          PR_BODY_FRONTEND_BEFORE: ${{ steps.before.outputs.frontend_rev }}
+          PR_BODY_FRONTEND_AFTER: ${{ steps.after.outputs.frontend_rev }}
+          PR_BODY_PLUGINS_BEFORE: ${{ steps.before.outputs.plugins_rev }}
+          PR_BODY_PLUGINS_AFTER: ${{ steps.after.outputs.plugins_rev }}
+          PR_BODY_RESOURCES_BEFORE: ${{ steps.before.outputs.resources_rev }}
+          PR_BODY_RESOURCES_AFTER: ${{ steps.after.outputs.resources_rev }}
+        run: |
+          set -euo pipefail
+
+          branch="automation/update-upstream"
+          body_file="${RUNNER_TEMP}/update-upstream-pr-body.md"
+
+          if git diff --quiet --exit-code -- flake.lock nix/sources.nix; then
+            echo "No upstream changes; skipping PR update."
+            exit 0
+          fi
+
+          cat >"${body_file}" <<EOF
+          - frontend: ${PR_BODY_FRONTEND_BEFORE} -> ${PR_BODY_FRONTEND_AFTER}
+          - plugins: ${PR_BODY_PLUGINS_BEFORE} -> ${PR_BODY_PLUGINS_AFTER}
+          - resources: ${PR_BODY_RESOURCES_BEFORE} -> ${PR_BODY_RESOURCES_AFTER}
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B "${branch}"
+          git add flake.lock nix/sources.nix
+
+          if git diff --cached --quiet; then
+            echo "No staged upstream changes; skipping PR update."
+            exit 0
+          fi
+
+          git commit -m "chore: update MoviePilot upstream inputs"
+          git push -f origin "${branch}"
+
+          pr_number="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --state open \
+              --head "${branch}" \
+              --json number \
+              --jq '.[0].number // ""'
+          )"
+
+          if [[ -n "${pr_number}" ]]; then
+            gh pr edit "${pr_number}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${PR_TITLE}" \
+              --body-file "${body_file}"
+          else
+            closed_pr_number="$(
+              gh pr list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --state closed \
+                --head "${branch}" \
+                --json number \
+                --jq '.[0].number // ""'
+            )"
+
+            if [[ -n "${closed_pr_number}" ]]; then
+              gh pr reopen "${closed_pr_number}" --repo "${GITHUB_REPOSITORY}"
+              gh pr edit "${closed_pr_number}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --title "${PR_TITLE}" \
+                --body-file "${body_file}"
+            else
+              gh pr create \
+                --repo "${GITHUB_REPOSITORY}" \
+                --base main \
+                --head "${branch}" \
+                --title "${PR_TITLE}" \
+                --body-file "${body_file}"
+            fi
+          fi
