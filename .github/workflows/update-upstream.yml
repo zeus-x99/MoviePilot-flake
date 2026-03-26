@@ -194,11 +194,19 @@ jobs:
             )"
 
             if [[ -n "${closed_pr_number}" ]]; then
-              gh pr reopen "${closed_pr_number}" --repo "${GITHUB_REPOSITORY}"
-              gh pr edit "${closed_pr_number}" \
-                --repo "${GITHUB_REPOSITORY}" \
-                --title "${PR_TITLE}" \
-                --body-file "${body_file}"
+              if gh pr reopen "${closed_pr_number}" --repo "${GITHUB_REPOSITORY}"; then
+                gh pr edit "${closed_pr_number}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --title "${PR_TITLE}" \
+                  --body-file "${body_file}"
+              else
+                gh pr create \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --base main \
+                  --head "${branch}" \
+                  --title "${PR_TITLE}" \
+                  --body-file "${body_file}"
+              fi
             else
               gh pr create \
                 --repo "${GITHUB_REPOSITORY}" \
