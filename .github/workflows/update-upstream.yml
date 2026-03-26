@@ -47,6 +47,27 @@ jobs:
       - name: Enable Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
+      - name: Capture versions before update
+        id: before
+        run: |
+          set -euo pipefail
+
+          short_rev() {
+            printf '%s' "${1:0:8}"
+          }
+
+          backend_version="$(nix eval --raw .#lib.packageVersions.backend)"
+          frontend_rev="$(nix eval --raw .#lib.sourceRevisions.frontend)"
+          plugins_rev="$(nix eval --raw .#lib.sourceRevisions.plugins)"
+          resources_rev="$(nix eval --raw .#lib.sourceRevisions.resources)"
+
+          {
+            echo "backend_version=${backend_version}"
+            echo "frontend_rev=$(short_rev "${frontend_rev}")"
+            echo "plugins_rev=$(short_rev "${plugins_rev}")"
+            echo "resources_rev=$(short_rev "${resources_rev}")"
+          } >>"${GITHUB_OUTPUT}"
+
       - name: Run update-upstream
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -86,6 +107,27 @@ jobs:
 
           nix run .#update-upstream -- "${args[@]}"
 
+      - name: Capture versions after update
+        id: after
+        run: |
+          set -euo pipefail
+
+          short_rev() {
+            printf '%s' "${1:0:8}"
+          }
+
+          backend_version="$(nix eval --raw .#lib.packageVersions.backend)"
+          frontend_rev="$(nix eval --raw .#lib.sourceRevisions.frontend)"
+          plugins_rev="$(nix eval --raw .#lib.sourceRevisions.plugins)"
+          resources_rev="$(nix eval --raw .#lib.sourceRevisions.resources)"
+
+          {
+            echo "backend_version=${backend_version}"
+            echo "frontend_rev=$(short_rev "${frontend_rev}")"
+            echo "plugins_rev=$(short_rev "${plugins_rev}")"
+            echo "resources_rev=$(short_rev "${resources_rev}")"
+          } >>"${GITHUB_OUTPUT}"
+
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8
         with:
@@ -94,17 +136,10 @@ jobs:
             nix/sources.nix
           branch: automation/update-upstream
           commit-message: "chore: update MoviePilot upstream inputs"
-          title: "chore: update MoviePilot upstream inputs"
+          title: "chore: MoviePilot ${{ steps.before.outputs.backend_version }} -> ${{ steps.after.outputs.backend_version }}"
           token: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
           body: |
-            自动更新 MoviePilot 上游锁定版本。
-
-            本次 workflow 会：
-            - 更新 flake inputs 中锁定的上游 revision
-            - 在前端变更时刷新 `nix/sources.nix` 里的 `frontendYarnHash`
-            - 仅提交 `flake.lock` 与 `nix/sources.nix`
-
-            触发方式：`${{ github.event_name }}`
-            校验模式：`${{ github.event_name == 'schedule' && 'skip' || github.event.inputs.check_mode || 'quick' }}`
-            组件参数：`${{ github.event.inputs.components || '全部' }}`
+            - frontend: ${{ steps.before.outputs.frontend_rev }} -> ${{ steps.after.outputs.frontend_rev }}
+            - plugins: ${{ steps.before.outputs.plugins_rev }} -> ${{ steps.after.outputs.plugins_rev }}
+            - resources: ${{ steps.before.outputs.resources_rev }} -> ${{ steps.after.outputs.resources_rev }}
           delete-branch: true
