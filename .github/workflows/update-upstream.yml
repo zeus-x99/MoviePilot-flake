@@ -95,6 +95,7 @@ jobs:
           branch: automation/update-upstream
           commit-message: "chore: update MoviePilot upstream inputs"
           title: "chore: update MoviePilot upstream inputs"
+          token: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
           body: |
             自动更新 MoviePilot 上游锁定版本。
 

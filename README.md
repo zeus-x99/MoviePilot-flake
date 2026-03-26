@@ -309,7 +309,7 @@ nix flake lock --update-input moviepilotResourcesSrc
 仓库现在附带两套工作流：
 
 - `.github/workflows/ci.yml`
-  在 `push`、`pull_request`、手动触发时执行 `nix flake check -L --accept-flake-config`
+  在 `push`、`pull_request`、手动触发时执行轻量校验：module/example eval、`update-upstream` 脚本检查，以及 `moviepilot-python` / `moviepilot-runtime` 构建
 - `.github/workflows/update-upstream.yml`
   每 4 小时自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；定时任务默认跳过重校验，验证交给 PR 上的 `CI`，手动触发时仍可传组件列表和校验模式
 
@@ -318,6 +318,14 @@ nix flake lock --update-input moviepilotResourcesSrc
 1. `Settings -> Actions -> General -> Workflow permissions`
 2. 选择 `Read and write permissions`
 3. 勾选 `Allow GitHub Actions to create and approve pull requests`
+
+如果你希望 `Update Upstream` 自动创建的 PR 也能自动触发后续 `CI`，再额外创建一个仓库 secret：
+
+- 名称：`MOVIEPILOTNIX_ACTIONS_PAT`
+- 内容：你自己的 GitHub PAT
+- 最少需要 `repo` 和 `workflow` 权限
+
+没有这个 secret 时，工作流仍然会正常开 PR，只是 GitHub 的默认 `GITHUB_TOKEN` 创建的 PR 不会再触发新的 workflow run。
 
 手动触发 `Update Upstream` 时：
 

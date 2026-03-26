@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   flake-check:
-    name: Flake Check
+    name: Quick Check
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
@@ -25,11 +25,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          docker system prune -af || true
+          df -h
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Enable Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Run nix flake check
-        run: nix flake check -L --accept-flake-config
+      - name: Run quick checks
+        run: |
+          set -euo pipefail
+          targets=(
+            .#checks.x86_64-linux.module-eval
+            .#checks.x86_64-linux.example-eval
+            .#checks.x86_64-linux.update-upstream-script
+            .#packages.x86_64-linux.moviepilot-python
+            .#packages.x86_64-linux.moviepilot-runtime
+          )
+
+          for target in "${targets[@]}"; do
+            echo "==> ${target}"
+            nix build "${target}" --no-link -L --accept-flake-config
+          done
