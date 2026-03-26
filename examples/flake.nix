@@ -1,16 +1,16 @@
 {
-  description = "Example NixOS host using MoviePilot-flake";
+  description = "Example NixOS host using MoviePilotNix";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
-    moviepilotFlake.url = "github:zeus-x99/MoviePilot-flake";
+    moviepilotNix.url = "github:zeus-x99/MoviePilotNix";
   };
 
-  outputs = { nixpkgs, moviepilotFlake, ... }: {
+  outputs = { nixpkgs, moviepilotNix, ... }: {
     nixosConfigurations.nas = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        moviepilotFlake.nixosModules.default
+        moviepilotNix.nixosModules.default
         ({ pkgs, ... }: {
           services.moviepilot = {
             enable = true;
@@ -21,7 +21,6 @@
             settings = {
               SUPERUSER = "admin";
               DB_TYPE = "sqlite";
-              AUTH_SITE = "iyuu";
             };
 
             extraPackages = with pkgs; [

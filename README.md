@@ -1,4 +1,4 @@
-# MoviePilot-flake
+# MoviePilotNix
 
 这是一个面向 NixOS 的 `MoviePilot` flake 仓库，目标是：
 
@@ -17,26 +17,34 @@
 
 ## 当前实现
 
-这个仓库把 MoviePilot 拆成了四个 Nix 产物：
+这个仓库把 MoviePilot 拆成了多层 Nix 产物：
 
 - `packages.<system>.moviepilot-python`
   纯 Nix 构建的 Python 运行环境，内含后端依赖和官方插件所需依赖
 - `packages.<system>.moviepilot-playwright-driver`
   与 Python 运行环境配套的浏览器二进制
+- `packages.<system>.moviepilot-backend`
+  纯 Nix 构建的后端源码树，已带上纯 Nix 运行补丁
+- `packages.<system>.moviepilot-plugins`
+  官方插件集合
+- `packages.<system>.moviepilot-resources`
+  资源文件集合
 - `packages.<system>.moviepilot-frontend`
-  纯 Nix 构建的前端 `dist`
+  纯 Nix 构建的前端 `dist`，以及运行上游 `service.js` 所需的最小 Node 依赖
 - `packages.<system>.moviepilot-runtime`
-  组装后的运行目录骨架，包含后端源码、官方插件、资源文件和前端构建产物
+  运行目录聚合包，方便手工查看完整运行目录骨架
 
-NixOS module 启动时只会把 `moviepilot-runtime` 从 Nix store 同步到 `${stateDir}/runtime`，不会联网构建。
+NixOS module 启动时会把 backend/plugins/resources/frontend 分层同步到 `${stateDir}` 下，避免插件或资源更新时整棵 backend 目录全量重刷，也不会联网构建。
 
-这里仍然保留 `${stateDir}/runtime`，不是因为还在“源码安装”，而是为了兼容 MoviePilot 上游对可写插件目录的假设：
+flake 还额外导出了 `lib.sourceRevisions` 和 `lib.packageVersions`，方便你在 review 或调试时直接看到当前锁定的上游 revision 与对应包版本。
+
+这里仍然保留 `${stateDir}/runtime`，不是因为还在“源码安装”，而是为了适配 MoviePilot 上游对可写插件目录的假设：
 
 - 官方/第三方插件会写入 `app/plugins`
 - 插件分身会原地修改插件文件
 - 资源文件也默认按 `ROOT_PATH/app/helper` 组织
 
-也就是说，当前仓库是“纯 Nix 构建 + 运行时可写数据目录兼容层”，不是“运行时再拉源码/装依赖”。
+也就是说，当前仓库是“纯 Nix 构建 + 运行时可写数据目录适配层”，不是“运行时再拉源码/装依赖”。
 
 ## 目录说明
 
@@ -67,14 +75,14 @@ NixOS module 启动时只会把 `moviepilot-runtime` 从 Nix store 同步到 `${
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
-    moviepilotFlake.url = "github:zeus-x99/MoviePilot-flake";
+    moviepilotNix.url = "github:zeus-x99/MoviePilotNix";
   };
 
-  outputs = { self, nixpkgs, moviepilotFlake, ... }: {
+  outputs = { self, nixpkgs, moviepilotNix, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        moviepilotFlake.nixosModules.default
+        moviepilotNix.nixosModules.default
         ({ ... }: {
           services.moviepilot = {
             enable = true;
@@ -109,8 +117,8 @@ PROXY_HOST=
 
 如果你已经有自己的系统 flake，最小接入只需要两步：
 
-1. 在 `inputs` 里加入 `moviepilotFlake.url = "github:zeus-x99/MoviePilot-flake";`
-2. 在对应主机的 `modules` 里加入 `moviepilotFlake.nixosModules.default`
+1. 在 `inputs` 里加入 `moviepilotNix.url = "github:zeus-x99/MoviePilotNix";`
+2. 在对应主机的 `modules` 里加入 `moviepilotNix.nixosModules.default`
 
 然后执行：
 
@@ -122,20 +130,47 @@ sudo nixos-rebuild switch --flake .#YOUR_HOST
 ## NixOS 选项
 
 - `services.moviepilot.enable`
-- `services.moviepilot.package`
-  默认使用 flake 内置的 `moviepilot-runtime`
+- `services.moviepilot.backendPackage`
+  默认使用 flake 内置的 `moviepilot-backend`
+- `services.moviepilot.pluginsPackage`
+  默认使用 flake 内置的 `moviepilot-plugins`
+- `services.moviepilot.resourcesPackage`
+  默认使用 flake 内置的 `moviepilot-resources`
 - `services.moviepilot.pythonPackage`
   默认使用 flake 内置的 `moviepilot-python`
-- `services.moviepilot.playwrightPackage`
-  默认使用 flake 内置的 `moviepilot-playwright-driver`
+- `services.moviepilot.playwrightBrowsersPath`
+  默认自动解析 flake 内置 playwright 浏览器目录
+  如果手工传字符串，必须使用绝对路径
+  更推荐直接传浏览器目录路径，例如 `pkgs.playwright-driver.browsers`
 - `services.moviepilot.stateDir`
   默认是 `/var/lib/moviepilot`
+  不能放到 `/nix/store` 这类只读路径
+  如果放在 `/home`、`/root` 或 `/run/user` 下，模块会自动禁用 `ProtectHome`
+- `services.moviepilot.host`
+  frontend 开启时默认是 `127.0.0.1`，只让 backend 监听本机
+  frontend 关闭时默认是 `0.0.0.0`
+  如果你显式改成 `0.0.0.0`，backend 也会直接监听外部接口
+- `services.moviepilot.openFirewall`
+  为 `true` 时只开放当前对外服务端口
+  frontend 开启时开放 `services.moviepilot.frontend.port`
+  frontend 关闭时开放 `services.moviepilot.backend.port`
 - `services.moviepilot.environmentFile`
+  建议放在 `/run/secrets` 一类的运行时路径，不要把密钥文件做进 `/nix/store`
 - `services.moviepilot.settings`
 - `services.moviepilot.extraPackages`
   默认带上 `ffmpeg`、`mediainfo`、`rclone`
 - `services.moviepilot.backend.port`
   默认 `3001`
+- `services.moviepilot.backend.allowedDevices`
+  默认 `[]`
+  兼容简单字符串写法，例如 `[ "/dev/dri/renderD128" "/dev/dri/card0" ]`
+  也支持按设备指定权限模式，例如 `[ { path = "/dev/video0"; permissions = "r"; } ]`
+  非空时 backend 会用 `DevicePolicy=closed` + `DeviceAllow` 只放行这些设备
+  `permissions` 目前支持 `r`、`rw`、`rwm`
+  如果同一路径重复声明，模块会给 warning；若 permissions 冲突，会自动收敛到更宽权限
+- `services.moviepilot.backend.supplementaryGroups`
+  默认 `[]`
+  如果设备节点权限依赖组，例如 `/dev/dri/*` 常见需要 `render`，`/dev/video*` 常见需要 `video`
 - `services.moviepilot.frontend.enable`
 - `services.moviepilot.frontend.port`
   默认 `3000`
@@ -146,6 +181,10 @@ sudo nixos-rebuild switch --flake .#YOUR_HOST
 
 ```bash
 nix build .#packages.x86_64-linux.moviepilot-python --no-link
+nix build .#packages.x86_64-linux.moviepilot-backend --no-link
+nix build .#packages.x86_64-linux.moviepilot-plugins --no-link
+nix build .#packages.x86_64-linux.moviepilot-resources --no-link
+nix build .#packages.x86_64-linux.moviepilot-frontend --no-link
 nix build .#packages.x86_64-linux.moviepilot-runtime --no-link
 nix eval .#checks.x86_64-linux.module-eval.drvPath
 sudo nixos-rebuild dry-activate --flake .#YOUR_HOST
@@ -166,6 +205,36 @@ journalctl -u moviepilot-backend -f
 journalctl -u moviepilot-frontend -f
 ```
 
+当前前端运行模型是：
+
+- 构建期仍然使用 `node + yarn`
+- 运行期由 `node service.js` 托管前端静态文件和反代
+- 没有修改上游前端源码，只是在打包时额外带上运行 `service.js` 所需的最小 `node_modules`
+
+如果你是从旧版本迁移，历史上遗留的 root-owned `stateDir` 内容会在 activation/boot 时由 tmpfiles 自动递归修正归属；如果想立刻手工触发一次，可执行：
+
+```bash
+sudo systemd-tmpfiles --create --prefix /var/lib/moviepilot
+```
+
+如果你改过 `services.moviepilot.stateDir`，把上面的路径替换成你自己的状态目录。
+
+硬件加速常见写法：
+
+```nix
+services.moviepilot.backend.allowedDevices = [
+  {
+    path = "/dev/dri/renderD128";
+    permissions = "rw";
+  }
+  {
+    path = "/dev/dri/card0";
+    permissions = "rw";
+  }
+];
+services.moviepilot.backend.supplementaryGroups = [ "render" "video" ];
+```
+
 ## 同步上游
 
 这个仓库现在把四个上游仓库都放进了 flake inputs，升级时不需要手工 clone：
@@ -177,11 +246,23 @@ nix run .#update-upstream
 默认行为：
 
 1. 更新 `moviepilotSrc`、`moviepilotFrontendSrc`、`moviepilotPluginsSrc`、`moviepilotResourcesSrc`
-2. 重新计算前端 `yarn.lock` 对应的离线依赖哈希，并写回 `nix/sources.nix`
-3. 做一次快速校验：
-   - `nix build .#packages.<currentSystem>.moviepilot-python --no-link`
-   - `nix build .#packages.<currentSystem>.moviepilot-runtime --no-link`
-   - `nix eval .#checks.<currentSystem>.module-eval.drvPath`
+2. 输出所选上游输入的更新前/更新后锁定 revision，便于你直接 review 和提交
+3. 重新计算前端 `yarn.lock` 对应的离线依赖哈希，并写回 `nix/sources.nix`
+   如果 hash 没变化，脚本会直接提示未变化
+4. 自动去重重复组件参数，避免重复执行同一个 `--update-input`
+5. 按所选组件做一次快速校验，只跑最小必要的构建/测试集合
+   总是包含 `nix build .#checks.<currentSystem>.module-eval --no-link`
+   以及 `nix build .#checks.<currentSystem>.example-eval --no-link`
+   `backend` 会额外校验 `moviepilot-python`、`moviepilot-backend`、`moviepilot-runtime`，x86_64-linux 下再跑 `nixos-test` 与 `nixos-test-no-frontend`
+   `frontend` 会额外校验 `moviepilot-frontend`、`moviepilot-runtime`，x86_64-linux 下再跑 `nixos-test`
+   `plugins` 会额外校验 `moviepilot-python`、`moviepilot-plugins`、`moviepilot-frontend`、`moviepilot-runtime`，x86_64-linux 下再跑 `nixos-test`
+   `resources` 会额外校验 `moviepilot-resources`、`moviepilot-runtime`，x86_64-linux 下再跑 `nixos-test`
+
+默认还会要求当前仓库工作树是干净的，避免把本地未提交改动和上游同步结果混在一起；如果你明确知道自己在做什么，可以显式传：
+
+```bash
+nix run .#update-upstream -- --allow-dirty --skip-check
+```
 
 如果你想跑完整校验，再显式加：
 
@@ -195,6 +276,15 @@ nix run .#update-upstream -- --full-check
 nix run .#update-upstream -- backend
 nix run .#update-upstream -- frontend
 nix run .#update-upstream -- plugins resources
+```
+
+脚本输出里你会直接看到类似：
+
+```text
+==> 更新前锁定版本
+  - backend: jxxghp/MoviePilot@abcdef123456
+==> 更新后锁定版本
+  - backend: jxxghp/MoviePilot@fedcba654321
 ```
 
 如果你临时只想更新锁文件，不想当场校验：

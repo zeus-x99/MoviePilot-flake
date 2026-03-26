@@ -1,0 +1,39 @@
+diff --git a/app/helper/plugin.py b/app/helper/plugin.py
+--- a/app/helper/plugin.py
++++ b/app/helper/plugin.py
+@@ -1,6 +1,7 @@
+ import importlib
+ import io
+ import json
++import os
+ import shutil
+ import site
+ import sys
+@@ -451,6 +452,9 @@ class PluginHelper(metaclass=WeakSingleton):
+         :param requirements_file: 依赖的 requirements.txt 文件路径
+         :return: (是否成功, 错误信息)
+         """
++        if os.environ.get("MOVIEPILOT_NIX_PURE") == "1":
++            return False, "[Nix] 纯 Nix 模式已禁用运行时 pip 安装，请把插件依赖声明到 flake 中"
++
+         wheels_dir = requirements_file.parent / "wheels"
+ 
+         find_links_option = []
+diff --git a/app/helper/resource.py b/app/helper/resource.py
+--- a/app/helper/resource.py
++++ b/app/helper/resource.py
+@@ -1,4 +1,5 @@
+ import json
++import os
+ from pathlib import Path
+ 
+ from app.core.config import settings
+@@ -30,6 +31,8 @@ class ResourceHelper:
+         """
+         检测是否有更新，如有则下载安装
+         """
++        if os.environ.get("MOVIEPILOT_NIX_PURE") == "1":
++            return None
+         if not settings.AUTO_UPDATE_RESOURCE:
+             return None
+         if SystemUtils.is_frozen():
