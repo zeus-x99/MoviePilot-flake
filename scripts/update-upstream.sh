@@ -24,6 +24,10 @@ resolve_repo_root() {
 repo_root="$(resolve_repo_root)"
 cd "$repo_root"
 
+official_version() {
+  nix eval --raw .#lib.version
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -195,6 +199,18 @@ else
   ensure_clean_worktree
 fi
 
+flake_lock_snapshot="$(mktemp)"
+sources_snapshot="$(mktemp)"
+cleanup_snapshots() {
+  rm -f "$flake_lock_snapshot" "$sources_snapshot"
+}
+trap cleanup_snapshots EXIT
+
+cp flake.lock "$flake_lock_snapshot"
+cp nix/sources.nix "$sources_snapshot"
+
+version_before="$(official_version)"
+
 update_frontend_hash=0
 
 for component in "${selected_components[@]}"; do
@@ -205,9 +221,21 @@ for component in "${selected_components[@]}"; do
 done
 
 echo "==> 更新上游输入: ${selected_components[*]}"
+echo "==> 官方版本: ${version_before}"
 show_locked_inputs "更新前锁定版本"
 nix flake update "${selected_inputs[@]}"
 show_locked_inputs "更新后锁定版本"
+
+version_after="$(official_version)"
+
+if [[ "$version_before" == "$version_after" ]]; then
+  echo "==> 官方版本未变化 (${version_before})，跳过本次同步并恢复锁定文件"
+  cp "$flake_lock_snapshot" flake.lock
+  cp "$sources_snapshot" nix/sources.nix
+  exit 0
+fi
+
+echo "==> 官方版本变化: ${version_before} -> ${version_after}"
 
 if ((update_frontend_hash)); then
   echo "==> 刷新前端 yarn hash"

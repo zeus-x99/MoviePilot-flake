@@ -247,10 +247,11 @@ nix run .#update-upstream
 
 1. 更新 `moviepilotSrc`、`moviepilotFrontendSrc`、`moviepilotPluginsSrc`、`moviepilotResourcesSrc`
 2. 输出所选上游输入的更新前/更新后锁定 revision，便于你直接 review 和提交
-3. 重新计算前端 `yarn.lock` 对应的离线依赖哈希，并写回 `nix/sources.nix`
+3. 只有当上游声明的官方版本号发生变化时，才会保留这次同步结果；如果只是同版本下的 commit 漂移，脚本会自动恢复 `flake.lock` 和 `nix/sources.nix`
+4. 重新计算前端 `yarn.lock` 对应的离线依赖哈希，并写回 `nix/sources.nix`
    如果 hash 没变化，脚本会直接提示未变化
-4. 自动去重重复组件参数，避免重复执行同一个 `--update-input`
-5. 按所选组件做一次快速校验，只跑最小必要的构建/测试集合
+5. 自动去重重复组件参数，避免重复执行同一个 `--update-input`
+6. 按所选组件做一次快速校验，只跑最小必要的构建/测试集合
    总是包含 `nix build .#checks.<currentSystem>.module-eval --no-link`
    以及 `nix build .#checks.<currentSystem>.example-eval --no-link`
    `backend` 会额外校验 `moviepilot-python`、`moviepilot-backend`、`moviepilot-runtime`，x86_64-linux 下再跑 `nixos-test` 与 `nixos-test-no-frontend`
@@ -311,7 +312,7 @@ nix flake lock --update-input moviepilotResourcesSrc
 - `.github/workflows/ci.yml`
   在 `push`、`pull_request`、手动触发时执行轻量校验：module/example eval、`update-upstream` 脚本检查，以及 `moviepilot-python` / `moviepilot-runtime` 构建
 - `.github/workflows/update-upstream.yml`
-  每 4 小时自动执行一次 `nix run .#update-upstream`，并在有变更时自动开 PR；定时任务默认跳过重校验，验证交给 PR 上的 `CI`，手动触发时仍可传组件列表和校验模式
+  每 4 小时自动执行一次 `nix run .#update-upstream`，只有官方版本号变化时才会开 PR；定时任务默认跳过重校验，验证交给 PR 上的 `CI`，手动触发时仍可传组件列表和校验模式
 - `.github/workflows/auto-merge-upstream.yml`
   当 `automation/update-upstream` 这条 PR 的 `CI` 成功后，自动 squash merge 并删除分支
 

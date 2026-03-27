@@ -898,6 +898,7 @@
               '      update)' \
               '        shift 2' \
               '        printf "%s\n" "$@" > "$log_dir/update-args"' \
+              '        touch "$log_dir/version-bumped"' \
               '        ;;' \
               '      *)' \
               '        echo "unexpected nix flake subcommand: $2" >&2' \
@@ -909,6 +910,12 @@
               '    shift' \
               '    if [[ "$1" == "--impure" && "$2" == "--raw" && "$3" == "--expr" && "$4" == "builtins.currentSystem" ]]; then' \
               '      printf "x86_64-linux\n"' \
+              '    elif [[ "$1" == "--raw" && "$2" == ".#lib.version" ]]; then' \
+              '      if [[ -e "$log_dir/version-bumped" ]]; then' \
+              '        printf "2.9.19\n"' \
+              '      else' \
+              '        printf "2.9.18\n"' \
+              '      fi' \
               '    else' \
               '      echo "unexpected nix eval args: $*" >&2' \
               '      exit 1' \
@@ -988,6 +995,7 @@
               '      update)' \
               '        shift 2' \
               '        printf "%s\n" "$@" > "$log_dir/update-args"' \
+              '        touch "$log_dir/version-bumped"' \
               '        ;;' \
               '      *)' \
               '        echo "unexpected nix flake subcommand: $2" >&2' \
@@ -997,7 +1005,13 @@
               '    ;;' \
               '  eval)' \
               '    shift' \
-              '    if [[ "$1" == "--raw" && "$2" == ".#lib.sources.frontend" ]]; then' \
+              '    if [[ "$1" == "--raw" && "$2" == ".#lib.version" ]]; then' \
+              '      if [[ -e "$log_dir/version-bumped" ]]; then' \
+              '        printf "2.9.19\n"' \
+              '      else' \
+              '        printf "2.9.18\n"' \
+              '      fi' \
+              '    elif [[ "$1" == "--raw" && "$2" == ".#lib.sources.frontend" ]]; then' \
               '      printf "%s/frontend-src\n" "$log_dir"' \
               '    else' \
               '      echo "unexpected nix eval args: $*" >&2' \
@@ -1043,6 +1057,69 @@
                 moviepilotFrontendSrc \
                 > "$TMPDIR/update-upstream-frontend-update-expected"
               cmp "$TMPDIR/update-upstream-frontend-update-expected" "$frontend_log_dir/update-args"
+            )
+
+            repo_same_version="$TMPDIR/repo-same-version"
+            same_version_log_dir="$TMPDIR/same-version-log"
+            init_repo "$repo_same_version"
+            mkdir -p "$repo_same_version/fakebin" "$same_version_log_dir"
+
+            cp "$repo_same_version/flake.lock" "$TMPDIR/same-version-flake.lock.before"
+            cp "$repo_same_version/nix/sources.nix" "$TMPDIR/same-version-sources.nix.before"
+
+            printf '%s\n' \
+              '#!${pkgs.bash}/bin/bash' \
+              'set -euo pipefail' \
+              "" \
+              'log_dir="''${UPDATE_UPSTREAM_TEST_LOG_DIR:?}"' \
+              "" \
+              'case "$1" in' \
+              '  flake)' \
+              '    case "$2" in' \
+              '      update)' \
+              '        shift 2' \
+              '        printf "%s\n" "$@" > "$log_dir/update-args"' \
+              '        ${pkgs.python3}/bin/python3 -c "import json, sys; path = sys.argv[1]; data = json.load(open(path, \"r\", encoding=\"utf-8\")); data[\"nodes\"][\"moviepilotSrc\"][\"locked\"][\"rev\"] = \"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"; open(path, \"w\", encoding=\"utf-8\").write(json.dumps(data, indent=2) + \"\\n\")" "$PWD/flake.lock"' \
+              '        ;;' \
+              '      *)' \
+              '        echo "unexpected nix flake subcommand: $2" >&2' \
+              '        exit 1' \
+              '        ;;' \
+              '    esac' \
+              '    ;;' \
+              '  eval)' \
+              '    shift' \
+              '    if [[ "$1" == "--raw" && "$2" == ".#lib.version" ]]; then' \
+              '      printf "2.9.18\n"' \
+              '    else' \
+              '      echo "unexpected nix eval args: $*" >&2' \
+              '      exit 1' \
+              '    fi' \
+              '    ;;' \
+              '  *)' \
+              '    echo "unexpected nix command: $1" >&2' \
+              '    exit 1' \
+              '    ;;' \
+              'esac' \
+              > "$repo_same_version/fakebin/nix"
+            chmod +x "$repo_same_version/fakebin/nix"
+
+            (
+              cd "$repo_same_version"
+              export UPDATE_UPSTREAM_TEST_LOG_DIR="$same_version_log_dir"
+              export PATH="$repo_same_version/fakebin:$PATH"
+              bash ./scripts/update-upstream.sh --allow-dirty backend --skip-check > "$TMPDIR/update-upstream-same-version.out"
+
+              grep -F "==> 官方版本: 2.9.18" "$TMPDIR/update-upstream-same-version.out" >/dev/null
+              grep -F "==> 官方版本未变化 (2.9.18)，跳过本次同步并恢复锁定文件" "$TMPDIR/update-upstream-same-version.out" >/dev/null
+
+              printf '%s\n' \
+                moviepilotSrc \
+                > "$TMPDIR/update-upstream-same-version-update-expected"
+              cmp "$TMPDIR/update-upstream-same-version-update-expected" "$same_version_log_dir/update-args"
+
+              cmp "$TMPDIR/same-version-flake.lock.before" flake.lock
+              cmp "$TMPDIR/same-version-sources.nix.before" nix/sources.nix
             )
 
             touch "$out"
