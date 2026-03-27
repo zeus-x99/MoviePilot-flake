@@ -658,6 +658,8 @@ in
           backend_refresh=1
           rsync -a --delete \
             --exclude 'app/plugins/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
             "$backend_source_dir/" "$backend_dir/"
 
           chmod -R u+w "$backend_dir"
