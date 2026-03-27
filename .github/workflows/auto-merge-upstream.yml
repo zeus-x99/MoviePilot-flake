@@ -47,6 +47,8 @@ jobs:
           head_ref="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json headRefName --jq .headRefName)"
           base_ref="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json baseRefName --jq .baseRefName)"
           head_sha="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json headRefOid --jq .headRefOid)"
+          title="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json title --jq .title)"
+          body="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body)"
 
           if [[ "${state}" != "OPEN" ]]; then
             echo "skip=true" >>"${GITHUB_OUTPUT}"
@@ -80,17 +82,29 @@ jobs:
 
           echo "skip=false" >>"${GITHUB_OUTPUT}"
           echo "number=${pr_number}" >>"${GITHUB_OUTPUT}"
+          echo "title=${title}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "body<<'EOF'"
+            printf '%s\n' "${body}"
+            echo "EOF"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Auto merge upstream pull request
         if: steps.pr.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          PR_BODY: ${{ steps.pr.outputs.body }}
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          body_file="${RUNNER_TEMP}/auto-merge-pr-body.md"
+          printf '%s\n' "${PR_BODY}" >"${body_file}"
           gh pr merge "${PR_NUMBER}" \
             --repo "${GITHUB_REPOSITORY}" \
             --squash \
+            --subject "${PR_TITLE}" \
+            --body-file "${body_file}" \
             --delete-branch \
             --match-head-commit "${TESTED_SHA}"
