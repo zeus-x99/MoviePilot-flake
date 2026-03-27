@@ -84,7 +84,7 @@ jobs:
           echo "number=${pr_number}" >>"${GITHUB_OUTPUT}"
           echo "title=${title}" >>"${GITHUB_OUTPUT}"
           {
-            echo "body<<'EOF'"
+            echo "body<<EOF"
             printf '%s\n' "${body}"
             echo "EOF"
           } >>"${GITHUB_OUTPUT}"
