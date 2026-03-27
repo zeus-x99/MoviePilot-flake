@@ -28,6 +28,65 @@ official_version() {
   nix eval --raw .#lib.version
 }
 
+original_field() {
+  local input="$1"
+  local field="$2"
+  jq -r --arg input "$input" --arg field "$field" '
+    .nodes[$input].original[$field] // ""
+  ' flake.lock
+}
+
+input_ref() {
+  local input="$1"
+  local type owner repo ref url
+
+  type="$(original_field "$input" type)"
+  owner="$(original_field "$input" owner)"
+  repo="$(original_field "$input" repo)"
+  ref="$(original_field "$input" ref)"
+  url="$(original_field "$input" url)"
+
+  if [[ -z "$type" ]]; then
+    type="$(lock_field "$input" type)"
+  fi
+  if [[ -z "$owner" ]]; then
+    owner="$(lock_field "$input" owner)"
+  fi
+  if [[ -z "$repo" ]]; then
+    repo="$(lock_field "$input" repo)"
+  fi
+
+  case "$type" in
+    github)
+      if [[ -n "$ref" ]]; then
+        printf 'github:%s/%s/%s\n' "$owner" "$repo" "$ref"
+      else
+        printf 'github:%s/%s\n' "$owner" "$repo"
+      fi
+      ;;
+    *)
+      if [[ -n "$url" ]]; then
+        printf '%s\n' "$url"
+      else
+        echo "错误: 无法为输入 $input 解析上游引用。" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+upstream_official_version() {
+  local frontend_ref frontend_src
+
+  frontend_ref="$(input_ref moviepilotFrontendSrc)"
+  frontend_src="$(
+    nix flake prefetch --json --refresh "$frontend_ref" \
+      | jq -r '.storePath'
+  )"
+
+  jq -r '.version' "$frontend_src/package.json"
+}
+
 usage() {
   cat <<'EOF'
 用法:
@@ -199,6 +258,17 @@ else
   ensure_clean_worktree
 fi
 
+version_before="$(official_version)"
+version_upstream="$(upstream_official_version)"
+
+echo "==> 当前官方版本: ${version_before}"
+echo "==> 上游官方版本: ${version_upstream}"
+
+if [[ "$version_before" == "$version_upstream" ]]; then
+  echo "==> 官方版本未变化 (${version_before})，跳过本次同步"
+  exit 0
+fi
+
 flake_lock_snapshot="$(mktemp)"
 sources_snapshot="$(mktemp)"
 cleanup_snapshots() {
@@ -208,8 +278,6 @@ trap cleanup_snapshots EXIT
 
 cp flake.lock "$flake_lock_snapshot"
 cp nix/sources.nix "$sources_snapshot"
-
-version_before="$(official_version)"
 
 update_frontend_hash=0
 
@@ -221,7 +289,6 @@ for component in "${selected_components[@]}"; do
 done
 
 echo "==> 更新上游输入: ${selected_components[*]}"
-echo "==> 官方版本: ${version_before}"
 show_locked_inputs "更新前锁定版本"
 nix flake update "${selected_inputs[@]}"
 show_locked_inputs "更新后锁定版本"

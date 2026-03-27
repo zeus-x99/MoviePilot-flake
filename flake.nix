@@ -817,6 +817,12 @@
                 '        "owner": "jxxghp",' \
                 '        "repo": "MoviePilot",' \
                 '        "rev": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+                '      },' \
+                '      "original": {' \
+                '        "owner": "jxxghp",' \
+                '        "repo": "MoviePilot",' \
+                '        "ref": "v2",' \
+                '        "type": "github"' \
                 '      }' \
                 '    },' \
                 '    "moviepilotFrontendSrc": {' \
@@ -824,6 +830,12 @@
                 '        "owner": "jxxghp",' \
                 '        "repo": "MoviePilot-Frontend",' \
                 '        "rev": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+                '      },' \
+                '      "original": {' \
+                '        "owner": "jxxghp",' \
+                '        "repo": "MoviePilot-Frontend",' \
+                '        "ref": "v2",' \
+                '        "type": "github"' \
                 '      }' \
                 '    },' \
                 '    "moviepilotPluginsSrc": {' \
@@ -831,6 +843,11 @@
                 '        "owner": "jxxghp",' \
                 '        "repo": "MoviePilot-Plugins",' \
                 '        "rev": "cccccccccccccccccccccccccccccccccccccccc"' \
+                '      },' \
+                '      "original": {' \
+                '        "owner": "jxxghp",' \
+                '        "repo": "MoviePilot-Plugins",' \
+                '        "type": "github"' \
                 '      }' \
                 '    },' \
                 '    "moviepilotResourcesSrc": {' \
@@ -838,6 +855,11 @@
                 '        "owner": "jxxghp",' \
                 '        "repo": "MoviePilot-Resources",' \
                 '        "rev": "dddddddddddddddddddddddddddddddddddddddd"' \
+                '      },' \
+                '      "original": {' \
+                '        "owner": "jxxghp",' \
+                '        "repo": "MoviePilot-Resources",' \
+                '        "type": "github"' \
                 '      }' \
                 '    }' \
                 '  },' \
@@ -884,7 +906,11 @@
             repo_quick="$TMPDIR/repo-quick"
             quick_log_dir="$TMPDIR/quick-log"
             init_repo "$repo_quick"
-            mkdir -p "$repo_quick/fakebin" "$quick_log_dir"
+            mkdir -p "$repo_quick/fakebin" "$quick_log_dir/upstream-frontend"
+
+            printf '%s\n' \
+              '{ "version": "2.9.19" }' \
+              > "$quick_log_dir/upstream-frontend/package.json"
 
             printf '%s\n' \
               '#!${pkgs.bash}/bin/bash' \
@@ -895,6 +921,15 @@
               'case "$1" in' \
               '  flake)' \
               '    case "$2" in' \
+              '      prefetch)' \
+              '        shift 2' \
+              '        if [[ "$1" == "--json" && "$2" == "--refresh" ]]; then' \
+              '          printf "{\"storePath\":\"%s/upstream-frontend\"}\n" "$log_dir"' \
+              '        else' \
+              '          echo "unexpected nix flake prefetch args: $*" >&2' \
+              '          exit 1' \
+              '        fi' \
+              '        ;;' \
               '      update)' \
               '        shift 2' \
               '        printf "%s\n" "$@" > "$log_dir/update-args"' \
@@ -980,8 +1015,12 @@
             repo_frontend="$TMPDIR/repo-frontend"
             frontend_log_dir="$TMPDIR/frontend-log"
             init_repo "$repo_frontend"
-            mkdir -p "$repo_frontend/fakebin" "$frontend_log_dir/frontend-src"
+            mkdir -p "$repo_frontend/fakebin" "$frontend_log_dir/frontend-src" "$frontend_log_dir/upstream-frontend"
             touch "$frontend_log_dir/frontend-src/yarn.lock"
+
+            printf '%s\n' \
+              '{ "version": "2.9.19" }' \
+              > "$frontend_log_dir/upstream-frontend/package.json"
 
             printf '%s\n' \
               '#!${pkgs.bash}/bin/bash' \
@@ -992,6 +1031,15 @@
               'case "$1" in' \
               '  flake)' \
               '    case "$2" in' \
+              '      prefetch)' \
+              '        shift 2' \
+              '        if [[ "$1" == "--json" && "$2" == "--refresh" ]]; then' \
+              '          printf "{\"storePath\":\"%s/upstream-frontend\"}\n" "$log_dir"' \
+              '        else' \
+              '          echo "unexpected nix flake prefetch args: $*" >&2' \
+              '          exit 1' \
+              '        fi' \
+              '        ;;' \
               '      update)' \
               '        shift 2' \
               '        printf "%s\n" "$@" > "$log_dir/update-args"' \
@@ -1062,10 +1110,14 @@
             repo_same_version="$TMPDIR/repo-same-version"
             same_version_log_dir="$TMPDIR/same-version-log"
             init_repo "$repo_same_version"
-            mkdir -p "$repo_same_version/fakebin" "$same_version_log_dir"
+            mkdir -p "$repo_same_version/fakebin" "$same_version_log_dir/upstream-frontend"
 
             cp "$repo_same_version/flake.lock" "$TMPDIR/same-version-flake.lock.before"
             cp "$repo_same_version/nix/sources.nix" "$TMPDIR/same-version-sources.nix.before"
+
+            printf '%s\n' \
+              '{ "version": "2.9.18" }' \
+              > "$same_version_log_dir/upstream-frontend/package.json"
 
             printf '%s\n' \
               '#!${pkgs.bash}/bin/bash' \
@@ -1076,6 +1128,15 @@
               'case "$1" in' \
               '  flake)' \
               '    case "$2" in' \
+              '      prefetch)' \
+              '        shift 2' \
+              '        if [[ "$1" == "--json" && "$2" == "--refresh" ]]; then' \
+              '          printf "{\"storePath\":\"%s/upstream-frontend\"}\n" "$log_dir"' \
+              '        else' \
+              '          echo "unexpected nix flake prefetch args: $*" >&2' \
+              '          exit 1' \
+              '        fi' \
+              '        ;;' \
               '      update)' \
               '        shift 2' \
               '        printf "%s\n" "$@" > "$log_dir/update-args"' \
@@ -1110,13 +1171,14 @@
               export PATH="$repo_same_version/fakebin:$PATH"
               bash ./scripts/update-upstream.sh --allow-dirty backend --skip-check > "$TMPDIR/update-upstream-same-version.out"
 
-              grep -F "==> 官方版本: 2.9.18" "$TMPDIR/update-upstream-same-version.out" >/dev/null
-              grep -F "==> 官方版本未变化 (2.9.18)，跳过本次同步并恢复锁定文件" "$TMPDIR/update-upstream-same-version.out" >/dev/null
+              grep -F "==> 当前官方版本: 2.9.18" "$TMPDIR/update-upstream-same-version.out" >/dev/null
+              grep -F "==> 上游官方版本: 2.9.18" "$TMPDIR/update-upstream-same-version.out" >/dev/null
+              grep -F "==> 官方版本未变化 (2.9.18)，跳过本次同步" "$TMPDIR/update-upstream-same-version.out" >/dev/null
 
-              printf '%s\n' \
-                moviepilotSrc \
-                > "$TMPDIR/update-upstream-same-version-update-expected"
-              cmp "$TMPDIR/update-upstream-same-version-update-expected" "$same_version_log_dir/update-args"
+              if [[ -e "$same_version_log_dir/update-args" ]]; then
+                echo "flake update should not run when version is unchanged" >&2
+                exit 1
+              fi
 
               cmp "$TMPDIR/same-version-flake.lock.before" flake.lock
               cmp "$TMPDIR/same-version-sources.nix.before" nix/sources.nix

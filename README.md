@@ -247,7 +247,7 @@ nix run .#update-upstream
 
 1. 更新 `moviepilotSrc`、`moviepilotFrontendSrc`、`moviepilotPluginsSrc`、`moviepilotResourcesSrc`
 2. 输出所选上游输入的更新前/更新后锁定 revision，便于你直接 review 和提交
-3. 只有当上游声明的官方版本号发生变化时，才会保留这次同步结果；如果只是同版本下的 commit 漂移，脚本会自动恢复 `flake.lock` 和 `nix/sources.nix`
+3. 只有当上游声明的官方版本号发生变化时，才会继续执行同步；如果只是同版本下的 commit 漂移，脚本会在更新前直接跳过，不修改 `flake.lock` 和 `nix/sources.nix`
 4. 重新计算前端 `yarn.lock` 对应的离线依赖哈希，并写回 `nix/sources.nix`
    如果 hash 没变化，脚本会直接提示未变化
 5. 自动去重重复组件参数，避免重复执行同一个 `--update-input`
