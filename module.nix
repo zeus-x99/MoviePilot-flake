@@ -100,6 +100,12 @@ let
   backendSupplementaryGroups = lib.unique cfg.backend.supplementaryGroups;
   backendUsesWhitelistedDevices = backendWhitelistedDevices != [ ];
   backendDeviceAllow = map (device: "${device.path} ${device.permissions}") backendResolvedAllowedDeviceSpecs;
+  scalarValueType = types.oneOf [
+    types.bool
+    types.float
+    types.int
+    types.str
+  ];
   backendDuplicateAllowedDevicePaths = builtins.filter (
     path: lib.length backendAllowedDevicePermissionsByPath.${path} > 1
   ) (builtins.attrNames backendAllowedDevicePermissionsByPath);
@@ -139,6 +145,18 @@ let
   publicPort = if cfg.frontend.enable then cfg.frontend.port else cfg.backend.port;
   defaultPlaywrightBrowsersPath = resolvePlaywrightBrowsersPath packages.moviepilot-playwright-driver;
   resolvedPlaywrightBrowsersPath = "${cfg.playwrightBrowsersPath}";
+  downloadersConfigured = cfg.downloaders != [ ];
+  serializedDownloaders = map (
+    downloader:
+    (builtins.removeAttrs downloader [ "pathMapping" ])
+    // {
+      path_mapping = map (mapping: [
+        mapping.source
+        mapping.target
+      ]) downloader.pathMapping;
+    }
+  ) cfg.downloaders;
+  serializedDownloadersJson = builtins.toJSON (builtins.toJSON serializedDownloaders);
 
   serializeEnv = value:
     if builtins.isBool value then lib.boolToString value
@@ -233,6 +251,14 @@ let
       "AF_INET6"
     ];
   };
+  downloadersSeedHardening = (mkRuntimeHardening [ ]) // {
+    PrivateDevices = true;
+    RestrictAddressFamilies = [
+      "AF_UNIX"
+      "AF_INET"
+      "AF_INET6"
+    ];
+  };
 in
 {
   options.services.moviepilot = {
@@ -311,18 +337,112 @@ in
     };
 
     settings = mkOption {
-      type = types.attrsOf (types.oneOf [
-        types.bool
-        types.float
-        types.int
-        types.str
-      ]);
+      type = types.attrsOf scalarValueType;
       default = { };
       example = literalExpression ''
         {
           SUPERUSER = "admin";
           DB_TYPE = "sqlite";
         }
+      '';
+    };
+
+    downloaders = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            name = mkOption {
+              type = types.str;
+              example = "qBittorrent";
+            };
+
+            type = mkOption {
+              type = types.str;
+              example = "qbittorrent";
+            };
+
+            default = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            enabled = mkOption {
+              type = types.bool;
+              default = true;
+            };
+
+            config = mkOption {
+              type = types.attrsOf scalarValueType;
+              default = { };
+              example = literalExpression ''
+                {
+                  host = "127.0.0.1";
+                  port = 8080;
+                  username = "admin";
+                }
+              '';
+            };
+
+            configFromEnvironment = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+              example = literalExpression ''
+                {
+                  password = "QBITTORRENT_PASSWORD";
+                }
+              '';
+            };
+
+            pathMapping = mkOption {
+              type = types.listOf (
+                types.submodule {
+                  options = {
+                    source = mkOption {
+                      type = types.str;
+                    };
+
+                    target = mkOption {
+                      type = types.str;
+                    };
+                  };
+                }
+              );
+              default = [ ];
+              example = literalExpression ''
+                [
+                  {
+                    source = "/data/shared/qBittorrent/downloads";
+                    target = "/data/shared/qBittorrent/downloads";
+                  }
+                ]
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = literalExpression ''
+        [
+          {
+            name = "qBittorrent";
+            type = "qbittorrent";
+            default = true;
+            config = {
+              host = "127.0.0.1";
+              port = 8080;
+              username = "admin";
+            };
+            configFromEnvironment = {
+              password = "QBITTORRENT_PASSWORD";
+            };
+            pathMapping = [
+              {
+                source = "/data/shared/qBittorrent/downloads";
+                target = "/data/shared/qBittorrent/downloads";
+              }
+            ];
+          }
+        ]
       '';
     };
 
@@ -624,11 +744,63 @@ in
       '';
     };
 
+    systemd.services.moviepilot-seed-downloaders = mkIf downloadersConfigured {
+      description = "Seed MoviePilot downloaders";
+      before = [ "moviepilot-backend.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // downloadersSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+        import os
+
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired = json.loads(${serializedDownloadersJson})
+
+        for downloader in desired:
+            config = dict(downloader.get("config", {}))
+            for key, env_name in downloader.pop("configFromEnvironment", {}).items():
+                if env_name not in os.environ:
+                    name = downloader.get("name") or downloader.get("type") or "unknown"
+                    raise RuntimeError(
+                        f"Missing environment variable {env_name} for downloader {name}.{key}"
+                    )
+                config[key] = os.environ[env_name]
+            downloader["config"] = config
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.Downloaders)
+        if current != desired:
+            oper.set(SystemConfigKey.Downloaders, desired)
+            print("MoviePilot downloaders config updated")
+        else:
+            print("MoviePilot downloaders config already up to date")
+        PY
+      '';
+    };
+
     systemd.services.moviepilot-backend = {
       description = "MoviePilot backend";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
+      requires = [ "moviepilot-prepare.service" ] ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ];
+      after = [ "moviepilot-prepare.service" ] ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ];
       path = cfg.extraPackages;
       environment = backendEnv;
       serviceConfig = {

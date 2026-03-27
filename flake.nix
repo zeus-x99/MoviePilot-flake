@@ -324,6 +324,40 @@
               })
             ];
           };
+          evalDownloaders = lib.nixosSystem {
+            inherit system;
+            modules = [
+              module
+              ({ ... }: {
+                services.moviepilot = {
+                  enable = true;
+                  environmentFile = "/run/secrets/moviepilot.env";
+                  downloaders = [
+                    {
+                      name = "qBittorrent";
+                      type = "qbittorrent";
+                      default = true;
+                      config = {
+                        host = "127.0.0.1";
+                        port = 8080;
+                        username = "admin";
+                      };
+                      configFromEnvironment = {
+                        password = "QBITTORRENT_PASSWORD";
+                      };
+                      pathMapping = [
+                        {
+                          source = "/downloads";
+                          target = "/downloads";
+                        }
+                      ];
+                    }
+                  ];
+                };
+                system.stateVersion = "25.05";
+              })
+            ];
+          };
           evalOpenFirewall = lib.nixosSystem {
             inherit system;
             modules = [
@@ -647,6 +681,12 @@
         assert eval.config.systemd.services.moviepilot-backend.environment.NGINX_PORT == "3000";
         assert evalNoFrontend.config.systemd.services.moviepilot-backend.environment.HOST == "0.0.0.0";
         assert evalExplicitPlaywrightBrowsersPath.config.systemd.services.moviepilot-backend.environment.PLAYWRIGHT_BROWSERS_PATH == "/run/moviepilot-playwright-browsers";
+        assert !(lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-downloaders" ] eval.config);
+        assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-downloaders" ] evalDownloaders.config;
+        assert evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.serviceConfig.EnvironmentFile == "/run/secrets/moviepilot.env";
+        assert lib.hasInfix "moviepilot-seed-downloaders.service" (builtins.concatStringsSep " " evalDownloaders.config.systemd.services.moviepilot-backend.requires);
+        assert lib.hasInfix "qbittorrent" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
+        assert lib.hasInfix "QBITTORRENT_PASSWORD" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
         assert evalOpenFirewall.config.networking.firewall.allowedTCPPorts == [ 3000 ];
         assert evalOpenFirewallNoFrontend.config.networking.firewall.allowedTCPPorts == [ 3001 ];
         assert relativeStateDirEval.success == false;
