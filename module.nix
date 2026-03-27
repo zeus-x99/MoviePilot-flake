@@ -145,7 +145,11 @@ let
   publicPort = if cfg.frontend.enable then cfg.frontend.port else cfg.backend.port;
   defaultPlaywrightBrowsersPath = resolvePlaywrightBrowsersPath packages.moviepilot-playwright-driver;
   resolvedPlaywrightBrowsersPath = "${cfg.playwrightBrowsersPath}";
+  serializeJsonForPython = value: builtins.toJSON (builtins.toJSON value);
   downloadersConfigured = cfg.downloaders != [ ];
+  directoriesConfigured = cfg.directories != [ ];
+  mediaServersConfigured = cfg.mediaServers != [ ];
+  storagesConfigured = cfg.storages != [ ];
   serializedDownloaders = map (
     downloader:
     (builtins.removeAttrs downloader [ "pathMapping" ])
@@ -156,12 +160,107 @@ let
       ]) downloader.pathMapping;
     }
   ) cfg.downloaders;
-  serializedDownloadersJson = builtins.toJSON (builtins.toJSON serializedDownloaders);
+  serializedDirectories = map (
+    directory:
+    lib.filterAttrs (_: value: value != null) {
+      name = directory.name;
+      priority = directory.priority;
+      storage = directory.storage;
+      download_path = directory.downloadPath;
+      media_type = directory.mediaType;
+      media_category = directory.mediaCategory;
+      download_type_folder = directory.downloadTypeFolder;
+      download_category_folder = directory.downloadCategoryFolder;
+      monitor_type = directory.monitorType;
+      monitor_mode = directory.monitorMode;
+      transfer_type = directory.transferType;
+      overwrite_mode = directory.overwriteMode;
+      library_path = directory.libraryPath;
+      library_storage = directory.libraryStorage;
+      renaming = directory.renaming;
+      scraping = directory.scraping;
+      notify = directory.notify;
+      library_type_folder = directory.libraryTypeFolder;
+      library_category_folder = directory.libraryCategoryFolder;
+    }
+  ) cfg.directories;
+  serializedMediaServers = map (
+    mediaServer:
+    (builtins.removeAttrs mediaServer [ "syncLibraries" ])
+    // {
+      sync_libraries = mediaServer.syncLibraries;
+    }
+  ) cfg.mediaServers;
+  serializedStorages = cfg.storages;
 
   serializeEnv = value:
     if builtins.isBool value then lib.boolToString value
     else if builtins.isInt value || builtins.isFloat value then toString value
     else toString value;
+
+  mkSeedSystemConfigService =
+    {
+      description,
+      configKey,
+      serializedConfig,
+      updatedMessage,
+      unchangedMessage,
+    }:
+    {
+      inherit description;
+      before = [ "moviepilot-backend.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+        import os
+
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired = json.loads(${serializeJsonForPython serializedConfig})
+
+        for entry in desired:
+            config_from_environment = entry.pop("configFromEnvironment", None) or {}
+            if not config_from_environment:
+                continue
+
+            config = dict(entry.get("config", {}))
+            for key, env_name in config_from_environment.items():
+                if env_name not in os.environ:
+                    name = entry.get("name") or entry.get("type") or "unknown"
+                    raise RuntimeError(
+                        f"Missing environment variable {env_name} for {name}.{key}"
+                    )
+                config[key] = os.environ[env_name]
+            entry["config"] = config
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.${configKey})
+        if current != desired:
+            oper.set(SystemConfigKey.${configKey}, desired)
+            print(${builtins.toJSON updatedMessage})
+        else:
+            print(${builtins.toJSON unchangedMessage})
+        PY
+      '';
+    };
 
   backendEnv = {
     CONFIG_DIR = "${cfg.stateDir}/config";
@@ -251,7 +350,7 @@ let
       "AF_INET6"
     ];
   };
-  downloadersSeedHardening = (mkRuntimeHardening [ ]) // {
+  configSeedHardening = (mkRuntimeHardening [ ]) // {
     PrivateDevices = true;
     RestrictAddressFamilies = [
       "AF_UNIX"
@@ -441,6 +540,270 @@ in
                 target = "/data/shared/qBittorrent/downloads";
               }
             ];
+          }
+        ]
+      '';
+    };
+
+    directories = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            name = mkOption {
+              type = types.str;
+              example = "本地整理";
+            };
+
+            priority = mkOption {
+              type = types.int;
+              default = 0;
+            };
+
+            storage = mkOption {
+              type = types.str;
+              default = "local";
+            };
+
+            downloadPath = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "/data/shared/qBittorrent/downloads";
+            };
+
+            mediaType = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "电影";
+            };
+
+            mediaCategory = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "国漫";
+            };
+
+            downloadTypeFolder = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            downloadCategoryFolder = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            monitorType = mkOption {
+              type = types.nullOr (types.enum [
+                "downloader"
+                "monitor"
+              ]);
+              default = null;
+            };
+
+            monitorMode = mkOption {
+              type = types.enum [
+                "fast"
+                "compatibility"
+              ];
+              default = "fast";
+            };
+
+            transferType = mkOption {
+              type = types.nullOr (types.enum [
+                "move"
+                "copy"
+                "link"
+                "softlink"
+              ]);
+              default = null;
+            };
+
+            overwriteMode = mkOption {
+              type = types.nullOr (types.enum [
+                "always"
+                "size"
+                "never"
+                "latest"
+              ]);
+              default = null;
+            };
+
+            libraryPath = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "/data/shared/media";
+            };
+
+            libraryStorage = mkOption {
+              type = types.nullOr types.str;
+              default = "local";
+            };
+
+            renaming = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            scraping = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            notify = mkOption {
+              type = types.bool;
+              default = true;
+            };
+
+            libraryTypeFolder = mkOption {
+              type = types.bool;
+              default = false;
+            };
+
+            libraryCategoryFolder = mkOption {
+              type = types.bool;
+              default = false;
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = literalExpression ''
+        [
+          {
+            name = "本地整理";
+            storage = "local";
+            downloadPath = "/data/shared/qBittorrent/downloads";
+            monitorType = "downloader";
+            transferType = "link";
+            libraryPath = "/data/shared/media";
+            libraryStorage = "local";
+            renaming = true;
+            scraping = true;
+            libraryTypeFolder = true;
+          }
+        ]
+      '';
+    };
+
+    mediaServers = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            name = mkOption {
+              type = types.str;
+              example = "Jellyfin";
+            };
+
+            type = mkOption {
+              type = types.str;
+              example = "jellyfin";
+            };
+
+            enabled = mkOption {
+              type = types.bool;
+              default = true;
+            };
+
+            config = mkOption {
+              type = types.attrsOf scalarValueType;
+              default = { };
+              example = literalExpression ''
+                {
+                  host = "http://127.0.0.1:8096";
+                }
+              '';
+            };
+
+            configFromEnvironment = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+              example = literalExpression ''
+                {
+                  apikey = "JELLYFIN_API_KEY";
+                }
+              '';
+            };
+
+            syncLibraries = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              example = [ "fb523da49904969939890997b679d34d" ];
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = literalExpression ''
+        [
+          {
+            name = "Jellyfin";
+            type = "jellyfin";
+            config = {
+              host = "http://127.0.0.1:8096";
+            };
+            configFromEnvironment = {
+              apikey = "JELLYFIN_API_KEY";
+            };
+            syncLibraries = [ "fb523da49904969939890997b679d34d" ];
+          }
+        ]
+      '';
+    };
+
+    storages = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            name = mkOption {
+              type = types.str;
+              example = "本地";
+            };
+
+            type = mkOption {
+              type = types.str;
+              example = "local";
+            };
+
+            config = mkOption {
+              type = types.attrsOf scalarValueType;
+              default = { };
+              example = literalExpression ''
+                {
+                  host = "http://127.0.0.1:5244";
+                  username = "admin";
+                }
+              '';
+            };
+
+            configFromEnvironment = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+              example = literalExpression ''
+                {
+                  password = "OPENLIST_PASSWORD";
+                }
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = literalExpression ''
+        [
+          {
+            name = "本地";
+            type = "local";
+          }
+          {
+            name = "OpenList";
+            type = "alist";
+            config = {
+              host = "http://127.0.0.1:5244";
+              username = "admin";
+            };
+            configFromEnvironment = {
+              password = "OPENLIST_PASSWORD";
+            };
           }
         ]
       '';
@@ -746,63 +1109,61 @@ in
       '';
     };
 
-    systemd.services.moviepilot-seed-downloaders = mkIf downloadersConfigured {
-      description = "Seed MoviePilot downloaders";
-      before = [ "moviepilot-backend.service" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // downloadersSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
-        };
-      script = ''
-        set -euo pipefail
+    systemd.services.moviepilot-seed-downloaders = mkIf downloadersConfigured (
+      mkSeedSystemConfigService {
+        description = "Seed MoviePilot downloaders";
+        configKey = "Downloaders";
+        serializedConfig = serializedDownloaders;
+        updatedMessage = "MoviePilot downloaders config updated";
+        unchangedMessage = "MoviePilot downloaders config already up to date";
+      }
+    );
 
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-        import os
+    systemd.services.moviepilot-seed-directories = mkIf directoriesConfigured (
+      mkSeedSystemConfigService {
+        description = "Seed MoviePilot directories";
+        configKey = "Directories";
+        serializedConfig = serializedDirectories;
+        updatedMessage = "MoviePilot directories config updated";
+        unchangedMessage = "MoviePilot directories config already up to date";
+      }
+    );
 
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
+    systemd.services.moviepilot-seed-media-servers = mkIf mediaServersConfigured (
+      mkSeedSystemConfigService {
+        description = "Seed MoviePilot media servers";
+        configKey = "MediaServers";
+        serializedConfig = serializedMediaServers;
+        updatedMessage = "MoviePilot media servers config updated";
+        unchangedMessage = "MoviePilot media servers config already up to date";
+      }
+    );
 
-        desired = json.loads(${serializedDownloadersJson})
-
-        for downloader in desired:
-            config = dict(downloader.get("config", {}))
-            for key, env_name in downloader.pop("configFromEnvironment", {}).items():
-                if env_name not in os.environ:
-                    name = downloader.get("name") or downloader.get("type") or "unknown"
-                    raise RuntimeError(
-                        f"Missing environment variable {env_name} for downloader {name}.{key}"
-                    )
-                config[key] = os.environ[env_name]
-            downloader["config"] = config
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.Downloaders)
-        if current != desired:
-            oper.set(SystemConfigKey.Downloaders, desired)
-            print("MoviePilot downloaders config updated")
-        else:
-            print("MoviePilot downloaders config already up to date")
-        PY
-      '';
-    };
+    systemd.services.moviepilot-seed-storages = mkIf storagesConfigured (
+      mkSeedSystemConfigService {
+        description = "Seed MoviePilot storages";
+        configKey = "Storages";
+        serializedConfig = serializedStorages;
+        updatedMessage = "MoviePilot storages config updated";
+        unchangedMessage = "MoviePilot storages config already up to date";
+      }
+    );
 
     systemd.services.moviepilot-backend = {
       description = "MoviePilot backend";
       wantedBy = [ "multi-user.target" ];
-      requires = [ "moviepilot-prepare.service" ] ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ];
-      after = [ "moviepilot-prepare.service" ] ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ];
+      requires =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
+        ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
+        ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
+        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ];
+      after =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
+        ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
+        ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
+        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ];
       path = cfg.extraPackages;
       environment = backendEnv;
       serviceConfig = {
