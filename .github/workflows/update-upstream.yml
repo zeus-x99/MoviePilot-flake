@@ -132,6 +132,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MOVIEPILOTNIX_ACTIONS_PAT || github.token }}
           PR_TITLE: "chore: MoviePilot ${{ steps.before.outputs.backend_version }} -> ${{ steps.after.outputs.backend_version }}"
+          PR_BODY_BACKEND_BEFORE: ${{ steps.before.outputs.backend_version }}
+          PR_BODY_BACKEND_AFTER: ${{ steps.after.outputs.backend_version }}
           PR_BODY_FRONTEND_BEFORE: ${{ steps.before.outputs.frontend_rev }}
           PR_BODY_FRONTEND_AFTER: ${{ steps.after.outputs.frontend_rev }}
           PR_BODY_PLUGINS_BEFORE: ${{ steps.before.outputs.plugins_rev }}
@@ -143,6 +145,7 @@ jobs:
 
           branch="automation/update-upstream"
           body_file="${RUNNER_TEMP}/update-upstream-pr-body.md"
+          commit_message_file="${RUNNER_TEMP}/update-upstream-commit-message.txt"
 
           if git diff --quiet --exit-code -- flake.lock nix/sources.nix; then
             echo "No upstream changes; skipping PR update."
@@ -150,6 +153,15 @@ jobs:
           fi
 
           cat >"${body_file}" <<EOF
+          - backend: ${PR_BODY_BACKEND_BEFORE} -> ${PR_BODY_BACKEND_AFTER}
+          - frontend: ${PR_BODY_FRONTEND_BEFORE} -> ${PR_BODY_FRONTEND_AFTER}
+          - plugins: ${PR_BODY_PLUGINS_BEFORE} -> ${PR_BODY_PLUGINS_AFTER}
+          - resources: ${PR_BODY_RESOURCES_BEFORE} -> ${PR_BODY_RESOURCES_AFTER}
+          EOF
+
+          cat >"${commit_message_file}" <<EOF
+          ${PR_TITLE}
+
           - frontend: ${PR_BODY_FRONTEND_BEFORE} -> ${PR_BODY_FRONTEND_AFTER}
           - plugins: ${PR_BODY_PLUGINS_BEFORE} -> ${PR_BODY_PLUGINS_AFTER}
           - resources: ${PR_BODY_RESOURCES_BEFORE} -> ${PR_BODY_RESOURCES_AFTER}
@@ -166,7 +178,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: update MoviePilot upstream inputs"
+          git commit -F "${commit_message_file}"
           git push -f origin "${branch}"
 
           pr_number="$(
