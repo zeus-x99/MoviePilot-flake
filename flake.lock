@@ -52,11 +52,11 @@
     "moviepilotSrc": {
       "flake": false,
       "locked": {
-        "lastModified": 1774535583,
-        "narHash": "sha256-rCO0rmPpvbJjNNTm2DjqMy/dohaVJ9H0QSPM9zEHEnc=",
+        "lastModified": 1774566170,
+        "narHash": "sha256-JLsTCJEw6TapNdjsibS2Xc4aO3cCQZCv9jKaEb/C0lI=",
         "owner": "jxxghp",
         "repo": "MoviePilot",
-        "rev": "27cc559c8653aa7cd2c401364e6cbad03d1fa250",
+        "rev": "d7c62fb55a896fe965be75f6db0dc2a4df930fa0",
         "type": "github"
       },
       "original": {
