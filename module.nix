@@ -150,6 +150,10 @@ let
   directoriesConfigured = cfg.directories != [ ];
   mediaServersConfigured = cfg.mediaServers != [ ];
   storagesConfigured = cfg.storages != [ ];
+  sitesConfigured = cfg.sites != null;
+  siteAuthConfigured = cfg.siteAuth != null;
+  indexerSitesConfigured = cfg.indexerSites != null;
+  rssSitesConfigured = cfg.rssSites != null;
   serializedDownloaders = map (
     downloader:
     (builtins.removeAttrs downloader [ "pathMapping" ])
@@ -192,6 +196,52 @@ let
     }
   ) cfg.mediaServers;
   serializedStorages = cfg.storages;
+  serializedSites =
+    if cfg.sites == null then
+      [ ]
+    else
+      map (
+        site:
+        lib.filterAttrs (_: value: value != null) {
+          name = site.name;
+          domain = site.domain;
+          url = site.url;
+          pri = site.priority;
+          rss = site.rss;
+          cookie = site.cookie;
+          ua = site.userAgent;
+          apikey = site.apikey;
+          token = site.token;
+          proxy = if site.proxy then 1 else 0;
+          filter = site.filter;
+          render = if site.render then 1 else 0;
+          public =
+            if site.public == null then
+              null
+            else if site.public then
+              1
+            else
+              0;
+          timeout = site.timeout;
+          limit_interval = site.limitInterval;
+          limit_count = site.limitCount;
+          limit_seconds = site.limitSeconds;
+          is_active = site.enabled;
+          downloader = site.downloader;
+          fromEnvironment = site.fromEnvironment;
+        }
+      ) cfg.sites;
+  serializedSiteAuth =
+    if cfg.siteAuth == null then
+      null
+    else
+      {
+        site = cfg.siteAuth.site;
+        params = cfg.siteAuth.params;
+        paramsFromEnvironment = cfg.siteAuth.paramsFromEnvironment;
+      };
+  serializedIndexerSites = if cfg.indexerSites == null then [ ] else cfg.indexerSites;
+  serializedRssSites = if cfg.rssSites == null then [ ] else cfg.rssSites;
 
   serializeEnv = value:
     if builtins.isBool value then lib.boolToString value
@@ -811,6 +861,184 @@ in
       '';
     };
 
+    sites = mkOption {
+      type = types.nullOr (
+        types.listOf (
+          types.submodule {
+            options = {
+              domain = mkOption {
+                type = types.str;
+                example = "pthome.net";
+              };
+
+              url = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "https://pthome.net/";
+              };
+
+              name = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "馒头";
+              };
+
+              priority = mkOption {
+                type = types.int;
+                default = 0;
+              };
+
+              rss = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              cookie = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              userAgent = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              apikey = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              token = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              fromEnvironment = mkOption {
+                type = types.attrsOf types.str;
+                default = { };
+                example = literalExpression ''
+                  {
+                    cookie = "MTEAM_COOKIE";
+                  }
+                '';
+              };
+
+              proxy = mkOption {
+                type = types.bool;
+                default = false;
+              };
+
+              filter = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              render = mkOption {
+                type = types.bool;
+                default = false;
+              };
+
+              public = mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+              };
+
+              timeout = mkOption {
+                type = types.int;
+                default = 15;
+              };
+
+              limitInterval = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+              };
+
+              limitCount = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+              };
+
+              limitSeconds = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+              };
+
+              enabled = mkOption {
+                type = types.bool;
+                default = true;
+              };
+
+              downloader = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+            };
+          }
+        )
+      );
+      default = null;
+      example = literalExpression ''
+        [
+          {
+            domain = "m-team.io";
+            url = "https://m-team.io/";
+            fromEnvironment = {
+              cookie = "MTEAM_COOKIE";
+            };
+          }
+        ]
+      '';
+    };
+
+    siteAuth = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            site = mkOption {
+              type = types.str;
+              example = "iyuu";
+            };
+
+            params = mkOption {
+              type = types.attrsOf scalarValueType;
+              default = { };
+            };
+
+            paramsFromEnvironment = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+              example = literalExpression ''
+                {
+                  token = "IYUU_SITE_TOKEN";
+                }
+              '';
+            };
+          };
+        }
+      );
+      default = null;
+      example = literalExpression ''
+        {
+          site = "iyuu";
+          paramsFromEnvironment = {
+            token = "IYUU_SITE_TOKEN";
+          };
+        }
+      '';
+    };
+
+    indexerSites = mkOption {
+      type = types.nullOr (types.listOf types.str);
+      default = null;
+      example = [ "m-team.io" "pthome.net" ];
+    };
+
+    rssSites = mkOption {
+      type = types.nullOr (types.listOf types.str);
+      default = null;
+      example = [ "m-team.io" ];
+    };
+
     extraPackages = mkOption {
       type = types.listOf types.package;
       default = with pkgs; [
@@ -1151,6 +1379,292 @@ in
       }
     );
 
+    systemd.services.moviepilot-seed-sites = mkIf sitesConfigured {
+      description = "Seed MoviePilot sites";
+      before = [ "moviepilot-backend.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+        import os
+
+        from app.db.site_oper import SiteOper
+        from app.helper.sites import SitesHelper
+        from app.utils.string import StringUtils
+
+        desired = json.loads(${serializeJsonForPython serializedSites})
+        oper = SiteOper()
+        sites_helper = SitesHelper()
+        managed_fields = [
+            "name",
+            "domain",
+            "url",
+            "pri",
+            "rss",
+            "cookie",
+            "ua",
+            "apikey",
+            "token",
+            "proxy",
+            "filter",
+            "render",
+            "public",
+            "timeout",
+            "limit_interval",
+            "limit_count",
+            "limit_seconds",
+            "is_active",
+            "downloader",
+        ]
+        created = 0
+        updated = 0
+
+        for entry in desired:
+            from_environment = entry.pop("fromEnvironment", None) or {}
+            for key, env_name in from_environment.items():
+                if env_name not in os.environ:
+                    raise RuntimeError(
+                        f"Missing environment variable {env_name} for site {entry.get('domain', 'unknown')}.{key}"
+                    )
+                entry[key] = os.environ[env_name]
+
+            domain = entry.get("domain")
+            if not domain:
+                raise RuntimeError("MoviePilot site entry requires domain")
+
+            url = entry.get("url") or f"https://{domain}/"
+            scheme, netloc = StringUtils.get_url_netloc(url)
+            if not scheme or not netloc:
+                raise RuntimeError(f"Invalid MoviePilot site URL: {url}")
+            entry["url"] = f"{scheme}://{netloc}/"
+
+            inferred_domain = StringUtils.get_url_domain(entry["url"])
+            if inferred_domain and inferred_domain != domain:
+                raise RuntimeError(
+                    f"Configured site domain {domain} does not match URL domain {inferred_domain}"
+                )
+
+            indexer = sites_helper.get_indexer(domain)
+            if not indexer:
+                raise RuntimeError(f"Unsupported MoviePilot site domain: {domain}")
+
+            if entry.get("name") is None:
+                entry["name"] = indexer.get("name")
+
+            if entry.get("public") is None:
+                entry["public"] = 1 if indexer.get("public") else 0
+
+            payload = {key: entry.get(key) for key in managed_fields}
+            existing = oper.get_by_domain(domain)
+
+            if not existing:
+                ok, message = oper.add(**payload)
+                if not ok:
+                    raise RuntimeError(message)
+                created += 1
+                continue
+
+            current = {key: getattr(existing, key) for key in managed_fields}
+            if current != payload:
+                oper.update(existing.id, payload)
+                updated += 1
+
+        if created or updated:
+            print("MoviePilot sites config updated")
+        else:
+            print("MoviePilot sites config already up to date")
+        PY
+      '';
+    };
+
+    systemd.services.moviepilot-seed-site-auth = mkIf siteAuthConfigured {
+      description = "Seed MoviePilot site auth config";
+      before = [ "moviepilot-backend.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+        import os
+
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired = json.loads(${serializeJsonForPython serializedSiteAuth})
+        params = dict(desired.get("params") or {})
+        params_from_environment = desired.pop("paramsFromEnvironment", None) or {}
+
+        for key, env_name in params_from_environment.items():
+            if env_name not in os.environ:
+                raise RuntimeError(
+                    f"Missing environment variable {env_name} for MoviePilot siteAuth.params.{key}"
+                )
+            params[key] = os.environ[env_name]
+
+        desired["params"] = params
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.UserSiteAuthParams)
+        if current != desired:
+            oper.set(SystemConfigKey.UserSiteAuthParams, desired)
+            print("MoviePilot site auth config updated")
+        else:
+            print("MoviePilot site auth config already up to date")
+        PY
+      '';
+    };
+
+    systemd.services.moviepilot-seed-indexer-sites = mkIf indexerSitesConfigured {
+      description = "Seed MoviePilot indexer site selection";
+      before = [ "moviepilot-backend.service" ];
+      requires =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      after =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+
+        from app.db.site_oper import SiteOper
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired_domains = json.loads(${serializeJsonForPython serializedIndexerSites})
+        site_oper = SiteOper()
+        resolved_ids = []
+        missing = []
+
+        for domain in desired_domains:
+            site = site_oper.get_by_domain(domain)
+            if not site:
+                missing.append(domain)
+                continue
+            resolved_ids.append(site.id)
+
+        if missing:
+            raise RuntimeError(
+                "MoviePilot indexerSites references unknown site domains: " + ", ".join(missing)
+            )
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.IndexerSites) or []
+        if current != resolved_ids:
+            oper.set(SystemConfigKey.IndexerSites, resolved_ids)
+            print("MoviePilot indexer site selection updated")
+        else:
+            print("MoviePilot indexer site selection already up to date")
+        PY
+      '';
+    };
+
+    systemd.services.moviepilot-seed-rss-sites = mkIf rssSitesConfigured {
+      description = "Seed MoviePilot RSS site selection";
+      before = [ "moviepilot-backend.service" ];
+      requires =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      after =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+
+        from app.db.site_oper import SiteOper
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired_domains = json.loads(${serializeJsonForPython serializedRssSites})
+        site_oper = SiteOper()
+        resolved_ids = []
+        missing = []
+
+        for domain in desired_domains:
+            site = site_oper.get_by_domain(domain)
+            if not site:
+                missing.append(domain)
+                continue
+            resolved_ids.append(site.id)
+
+        if missing:
+            raise RuntimeError(
+                "MoviePilot rssSites references unknown site domains: " + ", ".join(missing)
+            )
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.RssSites) or []
+        if current != resolved_ids:
+            oper.set(SystemConfigKey.RssSites, resolved_ids)
+            print("MoviePilot RSS site selection updated")
+        else:
+            print("MoviePilot RSS site selection already up to date")
+        PY
+      '';
+    };
+
     systemd.services.moviepilot-backend = {
       description = "MoviePilot backend";
       wantedBy = [ "multi-user.target" ];
@@ -1159,13 +1673,21 @@ in
         ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
         ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
         ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
-        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ];
+        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
+        ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
+        ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
+        ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
       after =
         [ "moviepilot-prepare.service" ]
         ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
         ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
         ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
-        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ];
+        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
+        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
+        ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
+        ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
+        ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
       path = cfg.extraPackages;
       environment = backendEnv;
       serviceConfig = {
