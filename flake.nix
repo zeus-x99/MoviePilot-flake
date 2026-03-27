@@ -667,7 +667,7 @@
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.PrivateDevices == true;
         assert lib.hasInfix "/bin/python -m app.main" eval.config.systemd.services.moviepilot-backend.serviceConfig.ExecStart;
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.KeyringMode == "private";
-        assert eval.config.systemd.services.moviepilot-backend.serviceConfig.ProcSubset == "pid";
+        assert eval.config.systemd.services.moviepilot-backend.serviceConfig.ProcSubset == "all";
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.ProtectHome == true;
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.ProtectProc == "invisible";
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.RemoveIPC == true;

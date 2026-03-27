@@ -163,7 +163,7 @@ pkgs.testers.runNixOSTest {
       )
     ''}
     check(
-        "systemctl show -p ProcSubset --value moviepilot-backend.service | grep -qx pid"
+        "systemctl show -p ProcSubset --value moviepilot-backend.service | grep -qx all"
     )
     check(
         "systemctl show -p ProtectHome --value moviepilot-backend.service | grep -qx yes"

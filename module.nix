@@ -332,6 +332,8 @@ let
   };
 
   backendHardening = (mkRuntimeHardening backendReadWritePaths) // {
+    # MoviePilot dashboard reads host-wide CPU/memory/network metrics via psutil.
+    ProcSubset = "all";
     PrivateDevices = !backendUsesWhitelistedDevices;
     RestrictAddressFamilies = [
       "AF_UNIX"
