@@ -1405,12 +1405,10 @@ in
         import os
 
         from app.db.site_oper import SiteOper
-        from app.helper.sites import SitesHelper
         from app.utils.string import StringUtils
 
         desired = json.loads(${serializeJsonForPython serializedSites})
         oper = SiteOper()
-        sites_helper = SitesHelper()
         managed_fields = [
             "name",
             "domain",
@@ -1460,15 +1458,11 @@ in
                     f"Configured site domain {domain} does not match URL domain {inferred_domain}"
                 )
 
-            indexer = sites_helper.get_indexer(domain)
-            if not indexer:
-                raise RuntimeError(f"Unsupported MoviePilot site domain: {domain}")
-
             if entry.get("name") is None:
-                entry["name"] = indexer.get("name")
+                entry["name"] = domain
 
             if entry.get("public") is None:
-                entry["public"] = 1 if indexer.get("public") else 0
+                entry["public"] = 0
 
             payload = {key: entry.get(key) for key in managed_fields}
             existing = oper.get_by_domain(domain)
