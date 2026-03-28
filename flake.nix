@@ -213,6 +213,11 @@
           moviepilot-backend = pkgs.callPackage ./nix/backend.nix {
             version = packageVersions.backend;
             backendSrc = moviepilotSrc;
+            frontendVersion =
+              if lib.hasPrefix "v" frontendManifest.version then
+                frontendManifest.version
+              else
+                "v${frontendManifest.version}";
           };
           moviepilot-plugins = pkgs.callPackage ./nix/plugins.nix {
             version = packageVersions.plugins;
@@ -358,6 +363,30 @@
               })
             ];
           };
+          evalSandboxRoot = lib.nixosSystem {
+            inherit system;
+            modules = [
+              module
+              ({ ... }: {
+                services.moviepilot = {
+                  enable = true;
+                  sandboxRoot = "/data/shared";
+                  directories = [
+                    {
+                      name = "本地整理";
+                      storage = "local";
+                      downloadPath = "/data/shared/downloads";
+                      monitorType = "downloader";
+                      transferType = "link";
+                      libraryPath = "/data/shared/media";
+                      libraryStorage = "local";
+                    }
+                  ];
+                };
+                system.stateVersion = "25.05";
+              })
+            ];
+          };
           evalOpenFirewall = lib.nixosSystem {
             inherit system;
             modules = [
@@ -488,129 +517,6 @@
             in
             conflict.config.system.build.toplevel.drvPath
           );
-          evalHardwareWhitelist = lib.nixosSystem {
-            inherit system;
-            modules = [
-              module
-              ({ ... }: {
-                services.moviepilot = {
-                  enable = true;
-                  backend.allowedDevices = [
-                    "/dev/dri/renderD128"
-                    "/dev/dri/card0"
-                  ];
-                };
-                system.stateVersion = "25.05";
-              })
-            ];
-          };
-          evalHardwareWhitelistWithGroups = lib.nixosSystem {
-            inherit system;
-            modules = [
-              module
-              ({ ... }: {
-                services.moviepilot = {
-                  enable = true;
-                  backend.allowedDevices = [
-                    "/dev/dri/renderD128"
-                    "/dev/video0"
-                  ];
-                  backend.supplementaryGroups = [
-                    "render"
-                    "video"
-                  ];
-                };
-                system.stateVersion = "25.05";
-              })
-            ];
-          };
-          evalHardwareWhitelistWithModes = lib.nixosSystem {
-            inherit system;
-            modules = [
-              module
-              ({ ... }: {
-                services.moviepilot = {
-                  enable = true;
-                  backend.allowedDevices = [
-                    {
-                      path = "/dev/dri/renderD128";
-                      permissions = "r";
-                    }
-                    {
-                      path = "/dev/video0";
-                      permissions = "rwm";
-                    }
-                  ];
-                  backend.supplementaryGroups = [
-                    "render"
-                    "video"
-                  ];
-                };
-                system.stateVersion = "25.05";
-              })
-            ];
-          };
-          evalHardwareWhitelistDuplicate = lib.nixosSystem {
-            inherit system;
-            modules = [
-              module
-              ({ ... }: {
-                services.moviepilot = {
-                  enable = true;
-                  backend.allowedDevices = [
-                    "/dev/dri/renderD128"
-                    {
-                      path = "/dev/dri/renderD128";
-                      permissions = "rw";
-                    }
-                  ];
-                  backend.supplementaryGroups = [ "render" ];
-                };
-                system.stateVersion = "25.05";
-              })
-            ];
-          };
-          evalHardwareWhitelistConflict = lib.nixosSystem {
-            inherit system;
-            modules = [
-              module
-              ({ ... }: {
-                services.moviepilot = {
-                  enable = true;
-                  backend.allowedDevices = [
-                    {
-                      path = "/dev/video0";
-                      permissions = "r";
-                    }
-                    {
-                      path = "/dev/video0";
-                      permissions = "rwm";
-                    }
-                  ];
-                  backend.supplementaryGroups = [ "video" ];
-                };
-                system.stateVersion = "25.05";
-              })
-            ];
-          };
-          invalidDevicePathEval = builtins.tryEval (
-            let
-              invalid = lib.nixosSystem {
-                inherit system;
-                modules = [
-                  module
-                  ({ ... }: {
-                    services.moviepilot = {
-                      enable = true;
-                      backend.allowedDevices = [ "/proc/kmsg" ];
-                    };
-                    system.stateVersion = "25.05";
-                  })
-                ];
-              };
-            in
-            invalid.config.system.build.toplevel.drvPath
-          );
           evalEnvironmentFileInStore = lib.nixosSystem {
             inherit system;
             modules = [
@@ -619,6 +525,36 @@
                 services.moviepilot = {
                   enable = true;
                   environmentFile = "/nix/store/fake-moviepilot.env";
+                };
+                system.stateVersion = "25.05";
+              })
+            ];
+          };
+          evalPlugins = lib.nixosSystem {
+            inherit system;
+            modules = [
+              module
+              ({ ... }: {
+                services.moviepilot = {
+                  enable = true;
+                  installedPlugins = [ "EnrichWebhook" ];
+                  pluginConfigs = {
+                    EnrichWebhook = {
+                      enabled = true;
+                    };
+                    NotifyWebhook = {
+                      fromEnvironment = {
+                        webhook = "PLUGIN_NOTIFY_WEBHOOK_URL";
+                      };
+                    };
+                  };
+                  pluginFolders = {
+                    Utilities = {
+                      plugins = [ "EnrichWebhook" ];
+                      order = 1;
+                      icon = "Menu";
+                    };
+                  };
                 };
                 system.stateVersion = "25.05";
               })
@@ -663,6 +599,10 @@
           "~@resources"
         ];
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.ReadWritePaths == [ "${stateDir}/config" ];
+        assert evalSandboxRoot.config.systemd.services.moviepilot-backend.serviceConfig.ReadWritePaths == [
+          "${stateDir}/config"
+          "/data/shared"
+        ];
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.PrivateIPC == true;
         assert eval.config.systemd.services.moviepilot-backend.serviceConfig.PrivateDevices == true;
         assert lib.hasInfix "/bin/python -m app.main" eval.config.systemd.services.moviepilot-backend.serviceConfig.ExecStart;
@@ -687,6 +627,18 @@
         assert lib.hasInfix "moviepilot-seed-downloaders.service" (builtins.concatStringsSep " " evalDownloaders.config.systemd.services.moviepilot-backend.requires);
         assert lib.hasInfix "qbittorrent" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
         assert lib.hasInfix "QBITTORRENT_PASSWORD" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
+        assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-installed-plugins" ] evalPlugins.config;
+        assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-plugin-configs" ] evalPlugins.config;
+        assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-plugin-folders" ] evalPlugins.config;
+        assert lib.hasInfix "moviepilot-seed-installed-plugins.service" (builtins.concatStringsSep " " evalPlugins.config.systemd.services.moviepilot-backend.requires);
+        assert lib.hasInfix "moviepilot-seed-plugin-configs.service" (builtins.concatStringsSep " " evalPlugins.config.systemd.services.moviepilot-backend.requires);
+        assert lib.hasInfix "moviepilot-seed-plugin-folders.service" (builtins.concatStringsSep " " evalPlugins.config.systemd.services.moviepilot-backend.requires);
+        assert lib.hasInfix "UserInstalledPlugins" evalPlugins.config.systemd.services.moviepilot-seed-installed-plugins.script;
+        assert lib.hasInfix "plugin." evalPlugins.config.systemd.services.moviepilot-seed-plugin-configs.script;
+        assert lib.hasInfix "EnrichWebhook" evalPlugins.config.systemd.services.moviepilot-seed-plugin-configs.script;
+        assert lib.hasInfix "PLUGIN_NOTIFY_WEBHOOK_URL" evalPlugins.config.systemd.services.moviepilot-seed-plugin-configs.script;
+        assert lib.hasInfix "PluginFolders" evalPlugins.config.systemd.services.moviepilot-seed-plugin-folders.script;
+        assert lib.hasInfix "Utilities" evalPlugins.config.systemd.services.moviepilot-seed-plugin-folders.script;
         assert evalOpenFirewall.config.networking.firewall.allowedTCPPorts == [ 3000 ];
         assert evalOpenFirewallNoFrontend.config.networking.firewall.allowedTCPPorts == [ 3001 ];
         assert relativeStateDirEval.success == false;
@@ -742,43 +694,6 @@
         assert builtins.any (
           msg: lib.hasInfix "ProtectHome" msg
         ) evalHomeStateDir.config.warnings;
-        assert evalHardwareWhitelist.config.systemd.services.moviepilot-backend.serviceConfig.PrivateDevices == false;
-        assert evalHardwareWhitelist.config.systemd.services.moviepilot-backend.serviceConfig.DevicePolicy == "closed";
-        assert evalHardwareWhitelist.config.systemd.services.moviepilot-backend.serviceConfig.DeviceAllow == [
-          "/dev/dri/renderD128 rw"
-          "/dev/dri/card0 rw"
-        ];
-        assert builtins.any (
-          msg: lib.hasInfix "supplementaryGroups" msg && lib.hasInfix "render" msg
-        ) evalHardwareWhitelist.config.warnings;
-        assert evalHardwareWhitelistWithGroups.config.systemd.services.moviepilot-backend.serviceConfig.SupplementaryGroups == [
-          "render"
-          "video"
-        ];
-        assert !(builtins.any (
-          msg: lib.hasInfix "supplementaryGroups" msg
-        ) evalHardwareWhitelistWithGroups.config.warnings);
-        assert evalHardwareWhitelistWithModes.config.systemd.services.moviepilot-backend.serviceConfig.DeviceAllow == [
-          "/dev/dri/renderD128 r"
-          "/dev/video0 rwm"
-        ];
-        assert evalHardwareWhitelistWithModes.config.systemd.services.moviepilot-backend.serviceConfig.SupplementaryGroups == [
-          "render"
-          "video"
-        ];
-        assert evalHardwareWhitelistDuplicate.config.systemd.services.moviepilot-backend.serviceConfig.DeviceAllow == [
-          "/dev/dri/renderD128 rw"
-        ];
-        assert builtins.any (
-          msg: lib.hasInfix "重复设备路径" msg && lib.hasInfix "/dev/dri/renderD128" msg
-        ) evalHardwareWhitelistDuplicate.config.warnings;
-        assert evalHardwareWhitelistConflict.config.systemd.services.moviepilot-backend.serviceConfig.DeviceAllow == [
-          "/dev/video0 rwm"
-        ];
-        assert builtins.any (
-          msg: lib.hasInfix "不同 permissions" msg && lib.hasInfix "/dev/video0 -> rwm" msg
-        ) evalHardwareWhitelistConflict.config.warnings;
-        assert invalidDevicePathEval.success == false;
         assert builtins.any (
           msg: lib.hasInfix "environmentFile" msg && lib.hasInfix "/nix/store" msg
         ) evalEnvironmentFileInStore.config.warnings;
@@ -802,9 +717,6 @@
             test -f ${lib.escapeShellArg resourcesManifestOutPath}
             echo ${lib.escapeShellArg evalNoFrontend.config.systemd.services.moviepilot-prepare.script} >/dev/null
             echo ${lib.escapeShellArg (lib.concatStringsSep "\n" evalHomeStateDir.config.warnings)} >/dev/null
-            echo ${lib.escapeShellArg (lib.concatStringsSep "\n" evalHardwareWhitelist.config.warnings)} >/dev/null
-            echo ${lib.escapeShellArg (lib.concatStringsSep "\n" evalHardwareWhitelistDuplicate.config.warnings)} >/dev/null
-            echo ${lib.escapeShellArg (lib.concatStringsSep "\n" evalHardwareWhitelistConflict.config.warnings)} >/dev/null
             echo ${lib.escapeShellArg (lib.concatStringsSep "\n" evalEnvironmentFileInStore.config.warnings)} >/dev/null
             if ${lib.boolToString relativeStateDirEval.success}; then
               echo "relative stateDir assertion unexpectedly succeeded" >&2
@@ -820,10 +732,6 @@
             fi
             if ${lib.boolToString reservedSettingEval.success}; then
               echo "reserved settings assertion unexpectedly succeeded" >&2
-              exit 1
-            fi
-            if ${lib.boolToString invalidDevicePathEval.success}; then
-              echo "invalid device path assertion unexpectedly succeeded" >&2
               exit 1
             fi
             touch "$out"
@@ -1235,12 +1143,6 @@
           nixos-test-no-frontend = import ./nix/tests/moviepilot.nix {
             inherit pkgs module;
             frontend = false;
-          };
-          nixos-test-allowed-devices = import ./nix/tests/moviepilot.nix {
-            inherit pkgs module;
-            allowedDevices = [ "/dev/full" ];
-            backendSupplementaryGroups = [ "moviepilotdevice" ];
-            ensureGroups = [ "moviepilotdevice" ];
           };
         });
     };

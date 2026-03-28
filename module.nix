@@ -29,17 +29,38 @@ let
     "${cfg.stateDir}/config"
     runtimeDir
   ];
-  backendReadWritePaths = [ "${cfg.stateDir}/config" ];
+  backendDirectoryReadWritePaths =
+    lib.unique (
+      builtins.filter (
+        path: builtins.isString path && path != "" && lib.hasPrefix "/" path
+      ) (
+        lib.flatten (
+          map (
+            directory:
+            (lib.optional (directory.downloadPath != null) directory.downloadPath)
+            ++ (lib.optional (directory.libraryPath != null) directory.libraryPath)
+          ) cfg.directories
+        )
+      )
+    );
+  sandboxRootInStore = cfg.sandboxRoot != null && pathIsEqualOrUnder "/nix/store" cfg.sandboxRoot;
+  backendPathsOutsideSandboxRoot =
+    if cfg.sandboxRoot == null then
+      [ ]
+    else
+      builtins.filter (
+        path: !(pathIsEqualOrUnder cfg.sandboxRoot path)
+      ) backendDirectoryReadWritePaths;
+  backendReadWritePaths =
+    [ "${cfg.stateDir}/config" ]
+    ++ (
+      if cfg.sandboxRoot != null then
+        [ cfg.sandboxRoot ]
+      else
+        backendDirectoryReadWritePaths
+    );
   packages = self.packages.${pkgs.stdenv.hostPlatform.system};
   backendPackage = cfg.backendPackage;
-  normalizeAllowedDevice = device:
-    if builtins.isString device then
-      {
-        path = device;
-        permissions = "rw";
-      }
-    else
-      device;
   pluginsPackage = cfg.pluginsPackage;
   resourcesPackage = cfg.resourcesPackage;
   backendSourceDir = "${backendPackage}/share/moviepilot/backend";
@@ -51,79 +72,19 @@ let
     AUTO_UPDATE_RESOURCE = false;
   };
   effectiveSettings = defaultSettings // cfg.settings;
-  backendAllowedDeviceSpecs = map normalizeAllowedDevice cfg.backend.allowedDevices;
-  allowedDevicePermissionRank = {
-    r = 0;
-    rw = 1;
-    rwm = 2;
-  };
-  backendAllowedDevicePermissionsByPath =
-    builtins.foldl' (
-      acc: device:
-      acc
-      // {
-        "${device.path}" = (acc.${device.path} or [ ]) ++ [ device.permissions ];
-      }
-    ) { } backendAllowedDeviceSpecs;
-  backendAllowedDeviceMergeState =
-    builtins.foldl' (
-      acc: device:
-      let
-        existing = acc.byPath.${device.path} or null;
-        keepCurrent =
-          existing == null
-          || allowedDevicePermissionRank.${device.permissions} > allowedDevicePermissionRank.${existing.permissions};
-      in
-      {
-        byPath =
-          acc.byPath
-          // {
-            "${device.path}" =
-              if keepCurrent then
-                device
-              else
-                existing;
-          };
-        order =
-          if existing == null then
-            acc.order ++ [ device.path ]
-          else
-            acc.order;
-      }
-    ) {
-      byPath = { };
-      order = [ ];
-    } backendAllowedDeviceSpecs;
-  backendResolvedAllowedDeviceSpecs =
-    map (path: backendAllowedDeviceMergeState.byPath.${path}) backendAllowedDeviceMergeState.order;
-  backendWhitelistedDevices = map (device: device.path) backendResolvedAllowedDeviceSpecs;
-  backendSupplementaryGroups = lib.unique cfg.backend.supplementaryGroups;
-  backendUsesWhitelistedDevices = backendWhitelistedDevices != [ ];
-  backendDeviceAllow = map (device: "${device.path} ${device.permissions}") backendResolvedAllowedDeviceSpecs;
   scalarValueType = types.oneOf [
     types.bool
     types.float
     types.int
     types.str
   ];
-  backendDuplicateAllowedDevicePaths = builtins.filter (
-    path: lib.length backendAllowedDevicePermissionsByPath.${path} > 1
-  ) (builtins.attrNames backendAllowedDevicePermissionsByPath);
-  backendConflictingAllowedDevicePaths = builtins.filter (
-    path: lib.length (lib.unique backendAllowedDevicePermissionsByPath.${path}) > 1
-  ) backendDuplicateAllowedDevicePaths;
-  backendDuplicateOnlyAllowedDevicePaths = builtins.filter (
-    path: !(lib.elem path backendConflictingAllowedDevicePaths)
-  ) backendDuplicateAllowedDevicePaths;
-  backendConflictingAllowedDeviceSummaries = map (
-    path: "${path} -> ${backendAllowedDeviceMergeState.byPath.${path}.permissions}"
-  ) backendConflictingAllowedDevicePaths;
-  backendNeedsRenderGroup = builtins.any (
-    path: path == "/dev/dri" || lib.hasPrefix "/dev/dri/" path
-  ) backendWhitelistedDevices;
-  backendNeedsVideoGroup = builtins.any (
-    path: lib.hasPrefix "/dev/video" path
-  ) backendWhitelistedDevices;
+  jsonValueType = types.nullOr (
+    types.oneOf [
+      scalarValueType
+      (types.listOf jsonValueType)
+      (types.attrsOf jsonValueType)
+    ]
+  );
   environmentFileInStore =
     cfg.environmentFile != null && pathIsEqualOrUnder "/nix/store" cfg.environmentFile;
   reservedSettingNames = [
@@ -154,6 +115,9 @@ let
   siteAuthConfigured = cfg.siteAuth != null;
   indexerSitesConfigured = cfg.indexerSites != null;
   rssSitesConfigured = cfg.rssSites != null;
+  installedPluginsConfigured = cfg.installedPlugins != null;
+  pluginConfigsConfigured = cfg.pluginConfigs != null;
+  pluginFoldersConfigured = cfg.pluginFolders != null;
   serializedDownloaders = map (
     downloader:
     (builtins.removeAttrs downloader [ "pathMapping" ])
@@ -242,6 +206,23 @@ let
       };
   serializedIndexerSites = if cfg.indexerSites == null then [ ] else cfg.indexerSites;
   serializedRssSites = if cfg.rssSites == null then [ ] else cfg.rssSites;
+  serializedInstalledPlugins = if cfg.installedPlugins == null then [ ] else lib.unique cfg.installedPlugins;
+  serializedPluginConfigs = if cfg.pluginConfigs == null then { } else cfg.pluginConfigs;
+  serializedPluginFolders =
+    if cfg.pluginFolders == null then
+      { }
+    else
+      lib.mapAttrs (
+        _: folder:
+        if builtins.isList folder then
+          folder
+        else
+          lib.filterAttrs (_: value: value != null) {
+            plugins = folder.plugins;
+            order = folder.order;
+            icon = folder.icon;
+          }
+      ) cfg.pluginFolders;
 
   serializeEnv = value:
     if builtins.isBool value then lib.boolToString value
@@ -300,6 +281,56 @@ let
                     )
                 config[key] = os.environ[env_name]
             entry["config"] = config
+
+        oper = SystemConfigOper()
+        current = oper.get(SystemConfigKey.${configKey})
+        if current != desired:
+            oper.set(SystemConfigKey.${configKey}, desired)
+            print(${builtins.toJSON updatedMessage})
+        else:
+            print(${builtins.toJSON unchangedMessage})
+        PY
+      '';
+    };
+
+  mkSeedRawSystemConfigService =
+    {
+      description,
+      configKey,
+      serializedConfig,
+      updatedMessage,
+      unchangedMessage,
+    }:
+    {
+      inherit description;
+      before = [ "moviepilot-backend.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+
+        from app.db.systemconfig_oper import SystemConfigOper
+        from app.schemas.types import SystemConfigKey
+
+        desired = json.loads(${serializeJsonForPython serializedConfig})
+        if desired == [] or desired == {}:
+            desired = None
 
         oper = SystemConfigOper()
         current = oper.get(SystemConfigKey.${configKey})
@@ -384,15 +415,12 @@ let
   backendHardening = (mkRuntimeHardening backendReadWritePaths) // {
     # MoviePilot dashboard reads host-wide CPU/memory/network metrics via psutil.
     ProcSubset = "all";
-    PrivateDevices = !backendUsesWhitelistedDevices;
+    PrivateDevices = true;
     RestrictAddressFamilies = [
       "AF_UNIX"
       "AF_INET"
       "AF_INET6"
     ];
-  } // optionalAttrs backendUsesWhitelistedDevices {
-    DeviceAllow = backendDeviceAllow;
-    DevicePolicy = "closed";
   };
   frontendHardening = (mkRuntimeHardening [ ]) // {
     PrivateDevices = true;
@@ -454,6 +482,17 @@ in
       type = types.str;
       default = "/var/lib/moviepilot";
       example = "/srv/moviepilot";
+    };
+
+    sandboxRoot = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "/data/shared";
+      description = ''
+        后端服务需要读写的共同父目录。设置后，模块会在 systemd 沙箱里只暴露这个根目录，
+        而不是分别暴露各个下载目录和媒体库目录。这样可以避免硬链接整理时因为多个
+        bind mount 落在不同挂载点而触发 "Invalid cross-device link"。
+      '';
     };
 
     user = mkOption {
@@ -1039,6 +1078,65 @@ in
       example = [ "m-team.io" ];
     };
 
+    installedPlugins = mkOption {
+      type = types.nullOr (types.listOf types.str);
+      default = null;
+      example = [ "EnrichWebhook" ];
+    };
+
+    pluginConfigs = mkOption {
+      type = types.nullOr (types.attrsOf (types.attrsOf jsonValueType));
+      default = null;
+      example = literalExpression ''
+        {
+          EnrichWebhook = {
+            enabled = true;
+            fromEnvironment = {
+              webhook = "ENRICH_WEBHOOK_URL";
+            };
+          };
+        }
+      '';
+    };
+
+    pluginFolders = mkOption {
+      type = types.nullOr (
+        types.attrsOf (
+          types.oneOf [
+            (types.listOf types.str)
+            (types.submodule {
+              options = {
+                plugins = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                };
+
+                order = mkOption {
+                  type = types.nullOr types.int;
+                  default = null;
+                };
+
+                icon = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                };
+              };
+            })
+          ]
+        )
+      );
+      default = null;
+      example = literalExpression ''
+        {
+          Utilities = {
+            plugins = [ "EnrichWebhook" ];
+            order = 1;
+            icon = "Menu";
+          };
+        }
+      '';
+    };
+
     extraPackages = mkOption {
       type = types.listOf types.package;
       default = with pkgs; [
@@ -1051,54 +1149,6 @@ in
     backend.port = mkOption {
       type = types.port;
       default = 3001;
-    };
-
-    backend.allowedDevices = mkOption {
-      type = types.listOf (types.oneOf [
-        types.str
-        (types.submodule {
-          options = {
-            path = mkOption {
-              type = types.str;
-              example = "/dev/dri/renderD128";
-            };
-
-            permissions = mkOption {
-              type = types.enum [
-                "r"
-                "rw"
-                "rwm"
-              ];
-              default = "rw";
-            };
-          };
-        })
-      ]);
-      default = [ ];
-      apply = map normalizeAllowedDevice;
-      example = literalExpression ''
-        [
-          {
-            path = "/dev/dri/renderD128";
-            permissions = "rw";
-          }
-          {
-            path = "/dev/video0";
-            permissions = "r";
-          }
-        ]
-      '';
-    };
-
-    backend.supplementaryGroups = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      example = literalExpression ''
-        [
-          "render"
-          "video"
-        ]
-      '';
     };
 
     frontend = {
@@ -1135,6 +1185,20 @@ in
         message = "services.moviepilot.environmentFile 必须是绝对路径";
       }
       {
+        assertion = cfg.sandboxRoot == null || lib.hasPrefix "/" cfg.sandboxRoot;
+        message = "services.moviepilot.sandboxRoot 必须是绝对路径";
+      }
+      {
+        assertion = !sandboxRootInStore;
+        message = "services.moviepilot.sandboxRoot 不能位于 /nix/store；该路径只读，无法作为后端可写目录";
+      }
+      {
+        assertion = backendPathsOutsideSandboxRoot == [ ];
+        message =
+          "services.moviepilot.sandboxRoot 必须覆盖所有整理目录路径，超出范围的路径: "
+          + lib.concatStringsSep ", " backendPathsOutsideSandboxRoot;
+      }
+      {
         assertion = !(cfg.frontend.enable && cfg.backend.port == cfg.frontend.port);
         message = "services.moviepilot.backend.port 与 services.moviepilot.frontend.port 不能相同";
       }
@@ -1142,29 +1206,11 @@ in
         assertion = !(builtins.isString cfg.playwrightBrowsersPath) || lib.hasPrefix "/" cfg.playwrightBrowsersPath;
         message = "services.moviepilot.playwrightBrowsersPath 若使用字符串，必须是绝对路径";
       }
-      {
-        assertion = builtins.all (path: lib.hasPrefix "/dev/" path) backendWhitelistedDevices;
-        message = "services.moviepilot.backend.allowedDevices 必须是 /dev/ 下的绝对设备路径列表";
-      }
     ];
 
     warnings =
       optional (cfg.user == "root" || cfg.group == "root")
         "services.moviepilot 最好不要以 root 用户或 root 组运行。"
-      ++ optional (backendUsesWhitelistedDevices && backendNeedsRenderGroup && !(lib.elem "render" backendSupplementaryGroups))
-        "services.moviepilot.backend.allowedDevices 包含 /dev/dri 设备，但 services.moviepilot.backend.supplementaryGroups 未包含 render；很多系统上设备节点仍会因权限被拒绝访问。"
-      ++ optional (backendUsesWhitelistedDevices && backendNeedsVideoGroup && !(lib.elem "video" backendSupplementaryGroups))
-        "services.moviepilot.backend.allowedDevices 包含 /dev/video* 设备，但 services.moviepilot.backend.supplementaryGroups 未包含 video；很多系统上设备节点仍会因权限被拒绝访问。"
-      ++ optional (backendDuplicateOnlyAllowedDevicePaths != [ ])
-        (
-          "services.moviepilot.backend.allowedDevices 包含重复设备路径；模块会自动按路径去重: "
-          + lib.concatStringsSep ", " backendDuplicateOnlyAllowedDevicePaths
-        )
-      ++ optional (backendConflictingAllowedDeviceSummaries != [ ])
-        (
-          "services.moviepilot.backend.allowedDevices 对同一路径声明了不同 permissions；模块会自动收敛到更宽权限: "
-          + lib.concatStringsSep ", " backendConflictingAllowedDeviceSummaries
-        )
       ++ optional stateDirDisablesProtectHome
         "services.moviepilot.stateDir 位于 /home、/root 或 /run/user 下，模块会自动禁用 ProtectHome；建议改用 /var/lib/moviepilot 或 /srv/moviepilot。"
       ++ optional environmentFileInStore
@@ -1249,11 +1295,14 @@ in
           || [ "$(cat "$backend_marker")" != "$current_backend_package" ] \
           || [ ! -f "$backend_dir/app/main.py" ]; then
           backend_refresh=1
-          rsync -a --delete \
+          rsync -ac --delete \
             --exclude 'app/plugins/' \
             --exclude '__pycache__/' \
             --exclude '*.pyc' \
             "$backend_source_dir/" "$backend_dir/"
+
+          find "$backend_dir" -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find "$backend_dir" -type f -name '*.pyc' -delete
 
           chmod -R u+w "$backend_dir"
 
@@ -1278,7 +1327,7 @@ in
             done < "$plugins_manifest"
           fi
 
-          rsync -a "$plugins_source_dir/" "$plugins_dir/"
+          rsync -ac "$plugins_source_dir/" "$plugins_dir/"
           if [ -f "$plugins_manifest_source" ]; then
             cp "$plugins_manifest_source" "$plugins_manifest"
           else
@@ -1306,7 +1355,7 @@ in
             done < "$resources_manifest"
           fi
 
-          rsync -a "$resources_source_dir/" "$resources_dir/"
+          rsync -ac "$resources_source_dir/" "$resources_dir/"
           if [ -f "$resources_manifest_source" ]; then
             cp "$resources_manifest_source" "$resources_manifest"
           else
@@ -1376,6 +1425,108 @@ in
         serializedConfig = serializedStorages;
         updatedMessage = "MoviePilot storages config updated";
         unchangedMessage = "MoviePilot storages config already up to date";
+      }
+    );
+
+    systemd.services.moviepilot-seed-installed-plugins = mkIf installedPluginsConfigured (
+      mkSeedRawSystemConfigService {
+        description = "Seed MoviePilot installed plugin selection";
+        configKey = "UserInstalledPlugins";
+        serializedConfig = serializedInstalledPlugins;
+        updatedMessage = "MoviePilot installed plugin selection updated";
+        unchangedMessage = "MoviePilot installed plugin selection already up to date";
+      }
+    );
+
+    systemd.services.moviepilot-seed-plugin-configs = mkIf pluginConfigsConfigured {
+      description = "Seed MoviePilot plugin configs";
+      before = [ "moviepilot-backend.service" ];
+      requires =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
+      after =
+        [ "moviepilot-prepare.service" ]
+        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
+      environment = backendEnv;
+      serviceConfig =
+        {
+          Type = "oneshot";
+          WorkingDirectory = "${runtimeDir}/backend";
+          User = cfg.user;
+          Group = cfg.group;
+          UMask = "0027";
+        }
+        // configSeedHardening
+        // optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        };
+      script = ''
+        set -euo pipefail
+
+        ${cfg.pythonPackage}/bin/python - <<'PY'
+        import json
+        import os
+
+        from app.db.systemconfig_oper import SystemConfigOper
+
+        desired = json.loads(${serializeJsonForPython serializedPluginConfigs})
+        resolved = {}
+
+        for plugin_id, entry in desired.items():
+            if not isinstance(entry, dict):
+                raise RuntimeError(
+                    f"MoviePilot pluginConfigs.{plugin_id} must be an attribute set"
+                )
+
+            plugin_config = dict(entry)
+            from_environment = plugin_config.pop("fromEnvironment", None) or {}
+            if not isinstance(from_environment, dict):
+                raise RuntimeError(
+                    f"MoviePilot pluginConfigs.{plugin_id}.fromEnvironment must be an attribute set"
+                )
+
+            for key, env_name in from_environment.items():
+                if env_name not in os.environ:
+                    raise RuntimeError(
+                        f"Missing environment variable {env_name} for MoviePilot pluginConfigs.{plugin_id}.{key}"
+                    )
+                plugin_config[key] = os.environ[env_name]
+
+            if plugin_config:
+                resolved[f"plugin.{plugin_id}"] = plugin_config
+
+        oper = SystemConfigOper()
+        current = {
+            key: value
+            for key, value in oper.all().items()
+            if key.startswith("plugin.")
+        }
+        changed = False
+
+        for key in sorted(set(current) - set(resolved)):
+            oper.delete(key)
+            changed = True
+
+        for key, value in resolved.items():
+            if current.get(key) != value:
+                oper.set(key, value)
+                changed = True
+
+        if changed:
+            print("MoviePilot plugin configs updated")
+        else:
+            print("MoviePilot plugin configs already up to date")
+        PY
+      '';
+    };
+
+    systemd.services.moviepilot-seed-plugin-folders = mkIf pluginFoldersConfigured (
+      mkSeedRawSystemConfigService {
+        description = "Seed MoviePilot plugin folders";
+        configKey = "PluginFolders";
+        serializedConfig = serializedPluginFolders;
+        updatedMessage = "MoviePilot plugin folders updated";
+        unchangedMessage = "MoviePilot plugin folders already up to date";
       }
     );
 
@@ -1672,6 +1823,9 @@ in
         ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
         ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
         ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
+        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ]
+        ++ optionals pluginConfigsConfigured [ "moviepilot-seed-plugin-configs.service" ]
+        ++ optionals pluginFoldersConfigured [ "moviepilot-seed-plugin-folders.service" ]
         ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
         ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
         ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
@@ -1682,6 +1836,9 @@ in
         ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
         ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
         ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
+        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ]
+        ++ optionals pluginConfigsConfigured [ "moviepilot-seed-plugin-configs.service" ]
+        ++ optionals pluginFoldersConfigured [ "moviepilot-seed-plugin-folders.service" ]
         ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
         ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
         ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
@@ -1698,9 +1855,6 @@ in
         RestartSec = "10s";
       }
       // backendHardening
-      // optionalAttrs (backendSupplementaryGroups != [ ]) {
-        SupplementaryGroups = backendSupplementaryGroups;
-      }
       // optionalAttrs (cfg.environmentFile != null) {
         EnvironmentFile = cfg.environmentFile;
       };

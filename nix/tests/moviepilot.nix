@@ -2,9 +2,6 @@
   pkgs,
   module,
   frontend ? true,
-  allowedDevices ? [ ],
-  backendSupplementaryGroups ? [ ],
-  ensureGroups ? [ ],
   exerciseOwnershipRepair ? false,
 }:
 
@@ -19,29 +16,9 @@ let
       {
         frontend.enable = false;
       };
-  backendConfig =
-    if allowedDevices == [ ] then
-      { }
-    else
-      {
-        backend.allowedDevices = allowedDevices;
-      };
-  backendGroupsConfig =
-    if backendSupplementaryGroups == [ ] then
-      { }
-    else
-      {
-        backend.supplementaryGroups = backendSupplementaryGroups;
-      };
 in
 pkgs.testers.runNixOSTest {
-  name =
-    if allowedDevices != [ ] then
-      "moviepilot-allowed-devices"
-    else if frontend then
-      "moviepilot"
-    else
-      "moviepilot-no-frontend";
+  name = if frontend then "moviepilot" else "moviepilot-no-frontend";
 
   nodes.machine = { pkgs, lib, ... }: {
     imports = [ module ];
@@ -52,8 +29,6 @@ pkgs.testers.runNixOSTest {
     '';
 
     virtualisation.diskSize = 4096;
-
-    users.groups = lib.genAttrs ensureGroups (_: { });
 
     services.moviepilot = {
       enable = true;
@@ -67,9 +42,7 @@ pkgs.testers.runNixOSTest {
         TMDB_API_KEY = "test-tmdb-api-key";
       };
     }
-    // frontendConfig
-    // backendConfig
-    // backendGroupsConfig;
+    // frontendConfig;
 
     system.stateVersion = "25.05";
   };
@@ -148,20 +121,9 @@ pkgs.testers.runNixOSTest {
     check(
         "systemctl show -p KeyringMode --value moviepilot-backend.service | grep -qx private"
     )
-    ${builtins.concatStringsSep "\n" (map (group: ''
-      check(
-          "gid=$(getent group ${group} | cut -d: -f3); pid=$(systemctl show -p MainPID --value moviepilot-backend.service); awk '/^Groups:/ { for (i = 2; i <= NF; i++) print $i }' /proc/$pid/status | grep -qx \"$gid\""
-      )
-    '') backendSupplementaryGroups)}
-    ${if allowedDevices == [ ] then ''
-      check(
-          "systemctl show -p PrivateDevices --value moviepilot-backend.service | grep -qx yes"
-      )
-    '' else ''
-      check(
-          "systemctl show -p DevicePolicy --value moviepilot-backend.service | grep -qx closed"
-      )
-    ''}
+    check(
+        "systemctl show -p PrivateDevices --value moviepilot-backend.service | grep -qx yes"
+    )
     check(
         "systemctl show -p ProcSubset --value moviepilot-backend.service | grep -qx all"
     )

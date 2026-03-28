@@ -3,6 +3,7 @@
   runCommand,
   version,
   backendSrc,
+  frontendVersion,
 }:
 
 let
@@ -20,6 +21,10 @@ runCommand "moviepilot-backend-${version}" { } ''
 
   cp -r ${patchedBackendSrc}/. "$backend_dir/"
   chmod -R u+w "$backend_dir"
+
+  sed -i -E \
+    "s/^FRONTEND_VERSION = '.*'$/FRONTEND_VERSION = '${frontendVersion}'/" \
+    "$backend_dir/version.py"
 
   rm -rf "$backend_dir/app/plugins"
   mkdir -p "$backend_dir/app/plugins"

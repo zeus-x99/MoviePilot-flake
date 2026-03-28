@@ -134,6 +134,13 @@ sudo nixos-rebuild switch --flake .#YOUR_HOST
   默认使用 flake 内置的 `moviepilot-backend`
 - `services.moviepilot.pluginsPackage`
   默认使用 flake 内置的 `moviepilot-plugins`
+- `services.moviepilot.installedPlugins`
+  声明式写入已安装插件列表
+- `services.moviepilot.pluginConfigs`
+  以插件 ID 为 key 声明插件配置
+  如果需要从环境变量注入敏感值，可在插件配置里写 `fromEnvironment = { token = "PLUGIN_TOKEN"; };`
+- `services.moviepilot.pluginFolders`
+  声明式写入插件分组配置
 - `services.moviepilot.resourcesPackage`
   默认使用 flake 内置的 `moviepilot-resources`
 - `services.moviepilot.pythonPackage`
@@ -161,16 +168,6 @@ sudo nixos-rebuild switch --flake .#YOUR_HOST
   默认带上 `ffmpeg`、`mediainfo`、`rclone`
 - `services.moviepilot.backend.port`
   默认 `3001`
-- `services.moviepilot.backend.allowedDevices`
-  默认 `[]`
-  兼容简单字符串写法，例如 `[ "/dev/dri/renderD128" "/dev/dri/card0" ]`
-  也支持按设备指定权限模式，例如 `[ { path = "/dev/video0"; permissions = "r"; } ]`
-  非空时 backend 会用 `DevicePolicy=closed` + `DeviceAllow` 只放行这些设备
-  `permissions` 目前支持 `r`、`rw`、`rwm`
-  如果同一路径重复声明，模块会给 warning；若 permissions 冲突，会自动收敛到更宽权限
-- `services.moviepilot.backend.supplementaryGroups`
-  默认 `[]`
-  如果设备节点权限依赖组，例如 `/dev/dri/*` 常见需要 `render`，`/dev/video*` 常见需要 `video`
 - `services.moviepilot.frontend.enable`
 - `services.moviepilot.frontend.port`
   默认 `3000`
@@ -218,22 +215,6 @@ sudo systemd-tmpfiles --create --prefix /var/lib/moviepilot
 ```
 
 如果你改过 `services.moviepilot.stateDir`，把上面的路径替换成你自己的状态目录。
-
-硬件加速常见写法：
-
-```nix
-services.moviepilot.backend.allowedDevices = [
-  {
-    path = "/dev/dri/renderD128";
-    permissions = "rw";
-  }
-  {
-    path = "/dev/dri/card0";
-    permissions = "rw";
-  }
-];
-services.moviepilot.backend.supplementaryGroups = [ "render" "video" ];
-```
 
 ## 同步上游
 
