@@ -1464,7 +1464,11 @@ in
             if entry.get("public") is None:
                 entry["public"] = 0
 
-            payload = {key: entry.get(key) for key in managed_fields}
+            payload = {
+                key: entry.get(key)
+                for key in managed_fields
+                if key in entry and entry.get(key) is not None
+            }
             existing = oper.get_by_domain(domain)
 
             if not existing:
