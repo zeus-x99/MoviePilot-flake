@@ -106,18 +106,47 @@ let
   publicPort = if cfg.frontend.enable then cfg.frontend.port else cfg.backend.port;
   defaultPlaywrightBrowsersPath = resolvePlaywrightBrowsersPath packages.moviepilot-playwright-driver;
   resolvedPlaywrightBrowsersPath = "${cfg.playwrightBrowsersPath}";
-  serializeJsonForPython = value: builtins.toJSON (builtins.toJSON value);
   downloadersConfigured = cfg.downloaders != [ ];
   directoriesConfigured = cfg.directories != [ ];
   mediaServersConfigured = cfg.mediaServers != [ ];
   storagesConfigured = cfg.storages != [ ];
   sitesConfigured = cfg.sites != null;
   siteAuthConfigured = cfg.siteAuth != null;
+  subscriptionsConfigured = cfg.subscriptions != null;
   indexerSitesConfigured = cfg.indexerSites != null;
   rssSitesConfigured = cfg.rssSites != null;
   installedPluginsConfigured = cfg.installedPlugins != null;
   pluginConfigsConfigured = cfg.pluginConfigs != null;
   pluginFoldersConfigured = cfg.pluginFolders != null;
+  apiSeedConfigured =
+    downloadersConfigured
+    || directoriesConfigured
+    || mediaServersConfigured
+    || storagesConfigured
+    || sitesConfigured
+    || siteAuthConfigured
+    || subscriptionsConfigured
+    || indexerSitesConfigured
+    || rssSitesConfigured
+    || installedPluginsConfigured
+    || pluginConfigsConfigured
+    || pluginFoldersConfigured;
+  apiBaseUrl = "http://127.0.0.1:${toString cfg.backend.port}/api/v1";
+  apiSeedUsername = if effectiveSettings ? SUPERUSER then effectiveSettings.SUPERUSER else "admin";
+  configuredSeedServiceUnits =
+    optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
+    ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
+    ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
+    ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
+    ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ]
+    ++ optionals pluginConfigsConfigured [ "moviepilot-seed-plugin-configs.service" ]
+    ++ optionals pluginFoldersConfigured [ "moviepilot-seed-plugin-folders.service" ]
+    ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
+    ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
+    ++ optionals subscriptionsConfigured [ "moviepilot-seed-subscriptions.service" ]
+    ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
+    ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
+  frontendSeedServiceUnits = configuredSeedServiceUnits;
   serializedDownloaders = map (
     downloader:
     (builtins.removeAttrs downloader [ "pathMapping" ])
@@ -204,6 +233,43 @@ let
         params = cfg.siteAuth.params;
         paramsFromEnvironment = cfg.siteAuth.paramsFromEnvironment;
       };
+  serializedSubscriptions =
+    if cfg.subscriptions == null then
+      [ ]
+    else
+      map (
+        subscription:
+        lib.filterAttrs (_: value: value != null) {
+          name = subscription.name;
+          year = subscription.year;
+          type = subscription.type;
+          keyword = subscription.keyword;
+          tmdbid = subscription.tmdbid;
+          doubanid = subscription.doubanid;
+          bangumiid = subscription.bangumiid;
+          mediaid = subscription.mediaId;
+          season = subscription.season;
+          filter = subscription.filter;
+          include = subscription.include;
+          exclude = subscription.exclude;
+          quality = subscription.quality;
+          resolution = subscription.resolution;
+          effect = subscription.effect;
+          total_episode = subscription.totalEpisode;
+          start_episode = subscription.startEpisode;
+          sites = subscription.sites;
+          downloader = subscription.downloader;
+          best_version = if subscription.bestVersion then 1 else 0;
+          save_path = subscription.savePath;
+          search_imdbid = if subscription.searchImdbId then 1 else 0;
+          custom_words = subscription.customWords;
+          media_category = subscription.mediaCategory;
+          filter_groups = subscription.filterGroups;
+          episode_group = subscription.episodeGroup;
+          state = subscription.state;
+          username = subscription.username;
+        }
+      ) cfg.subscriptions;
   serializedIndexerSites = if cfg.indexerSites == null then [ ] else cfg.indexerSites;
   serializedRssSites = if cfg.rssSites == null then [ ] else cfg.rssSites;
   serializedInstalledPlugins = if cfg.installedPlugins == null then [ ] else lib.unique cfg.installedPlugins;
@@ -229,117 +295,57 @@ let
     else if builtins.isInt value || builtins.isFloat value then toString value
     else toString value;
 
-  mkSeedSystemConfigService =
+  mkSeedApiService =
     {
       description,
-      configKey,
-      serializedConfig,
-      updatedMessage,
-      unchangedMessage,
+      mode,
+      payload,
+      requires ? [ ],
+      after ? [ ],
+      environment ? { },
     }:
     {
       inherit description;
-      before = [ "moviepilot-backend.service" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
-      environment = backendEnv;
+      wantedBy = [ "multi-user.target" ];
+      partOf = [ "moviepilot-backend.service" ];
+      before = optionals cfg.frontend.enable [ "moviepilot-frontend.service" ];
+      requires = [ "moviepilot-backend.service" ] ++ requires;
+      after = [ "moviepilot-backend.service" ] ++ after;
+      restartIfChanged = true;
+      environment =
+        backendEnv
+        // {
+          MOVIEPILOT_API_BASE_URL = apiBaseUrl;
+          MOVIEPILOT_API_USERNAME = apiSeedUsername;
+        }
+        // environment;
       serviceConfig =
         {
           Type = "oneshot";
+          RemainAfterExit = true;
           WorkingDirectory = "${runtimeDir}/backend";
           User = cfg.user;
           Group = cfg.group;
           UMask = "0027";
         }
-        // configSeedHardening
+        // (mkRuntimeHardening [ "${cfg.stateDir}/config" ])
+        // {
+          PrivateDevices = true;
+          RestrictAddressFamilies = [
+            "AF_UNIX"
+            "AF_INET"
+            "AF_INET6"
+          ];
+        }
         // optionalAttrs (cfg.environmentFile != null) {
           EnvironmentFile = cfg.environmentFile;
         };
       script = ''
         set -euo pipefail
 
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-        import os
-
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
-
-        desired = json.loads(${serializeJsonForPython serializedConfig})
-
-        for entry in desired:
-            config_from_environment = entry.pop("configFromEnvironment", None) or {}
-            if not config_from_environment:
-                continue
-
-            config = dict(entry.get("config", {}))
-            for key, env_name in config_from_environment.items():
-                if env_name not in os.environ:
-                    name = entry.get("name") or entry.get("type") or "unknown"
-                    raise RuntimeError(
-                        f"Missing environment variable {env_name} for {name}.{key}"
-                    )
-                config[key] = os.environ[env_name]
-            entry["config"] = config
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.${configKey})
-        if current != desired:
-            oper.set(SystemConfigKey.${configKey}, desired)
-            print(${builtins.toJSON updatedMessage})
-        else:
-            print(${builtins.toJSON unchangedMessage})
-        PY
-      '';
-    };
-
-  mkSeedRawSystemConfigService =
-    {
-      description,
-      configKey,
-      serializedConfig,
-      updatedMessage,
-      unchangedMessage,
-    }:
-    {
-      inherit description;
-      before = [ "moviepilot-backend.service" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
-        };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
-
-        desired = json.loads(${serializeJsonForPython serializedConfig})
-        if desired == [] or desired == {}:
-            desired = None
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.${configKey})
-        if current != desired:
-            oper.set(SystemConfigKey.${configKey}, desired)
-            print(${builtins.toJSON updatedMessage})
-        else:
-            print(${builtins.toJSON unchangedMessage})
-        PY
+        ${cfg.pythonPackage}/bin/python ${./nix/moviepilot-api-seed.py} ${mode} <<'JSON'
+        ${builtins.toJSON payload}
+        JSON
       '';
     };
 
@@ -1066,6 +1072,192 @@ in
       '';
     };
 
+    subscriptions = mkOption {
+      type = types.nullOr (
+        types.listOf (
+          types.submodule {
+            options = {
+              name = mkOption {
+                type = types.str;
+                example = "斗破苍穹";
+              };
+
+              year = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "2017";
+              };
+
+              type = mkOption {
+                type = types.enum [
+                  "电影"
+                  "电视剧"
+                ];
+                example = "电视剧";
+              };
+
+              keyword = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "Fights Break Sphere S05";
+              };
+
+              tmdbid = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+                example = 79481;
+              };
+
+              doubanid = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              bangumiid = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+              };
+
+              mediaId = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              season = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+                example = 5;
+              };
+
+              filter = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              include = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "MWeb";
+              };
+
+              exclude = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              quality = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "WEBDL";
+              };
+
+              resolution = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = "4K";
+              };
+
+              effect = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              totalEpisode = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+              };
+
+              startEpisode = mkOption {
+                type = types.nullOr types.int;
+                default = null;
+                example = 185;
+              };
+
+              sites = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                description = "站点 domain 列表，模块会在写入前解析成 MoviePilot 的站点 ID。";
+                example = [ "m-team.cc" ];
+              };
+
+              downloader = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              bestVersion = mkOption {
+                type = types.bool;
+                default = false;
+              };
+
+              savePath = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              searchImdbId = mkOption {
+                type = types.bool;
+                default = false;
+              };
+
+              customWords = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              mediaCategory = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              filterGroups = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+              };
+
+              episodeGroup = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+
+              state = mkOption {
+                type = types.enum [
+                  "N"
+                  "R"
+                  "P"
+                  "S"
+                ];
+                default = "R";
+              };
+
+              username = mkOption {
+                type = types.str;
+                default = "admin";
+              };
+            };
+          }
+        )
+      );
+      default = null;
+      example = literalExpression ''
+        [
+          {
+            name = "斗破苍穹";
+            year = "2017";
+            type = "电视剧";
+            tmdbid = 79481;
+            season = 5;
+            keyword = "Fights Break Sphere S05";
+            include = "MWeb";
+            quality = "WEB-DL";
+            resolution = "2160p|4K|x2160";
+            startEpisode = 185;
+            sites = [ "m-team.cc" ];
+          }
+        ]
+      '';
+    };
+
     indexerSites = mkOption {
       type = types.nullOr (types.listOf types.str);
       default = null;
@@ -1205,6 +1397,12 @@ in
       {
         assertion = !(builtins.isString cfg.playwrightBrowsersPath) || lib.hasPrefix "/" cfg.playwrightBrowsersPath;
         message = "services.moviepilot.playwrightBrowsersPath 若使用字符串，必须是绝对路径";
+      }
+      {
+        assertion = !apiSeedConfigured || cfg.environmentFile != null;
+        message =
+          "services.moviepilot 声明式配置通过 API 注入时需要设置 services.moviepilot.environmentFile，"
+          + "并通过其中的 SUPERUSER_PASSWORD 登录 MoviePilot API。";
       }
     ];
 
@@ -1389,460 +1587,130 @@ in
     };
 
     systemd.services.moviepilot-seed-downloaders = mkIf downloadersConfigured (
-      mkSeedSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot downloaders";
-        configKey = "Downloaders";
-        serializedConfig = serializedDownloaders;
-        updatedMessage = "MoviePilot downloaders config updated";
-        unchangedMessage = "MoviePilot downloaders config already up to date";
+        mode = "downloaders";
+        payload = serializedDownloaders;
       }
     );
 
     systemd.services.moviepilot-seed-directories = mkIf directoriesConfigured (
-      mkSeedSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot directories";
-        configKey = "Directories";
-        serializedConfig = serializedDirectories;
-        updatedMessage = "MoviePilot directories config updated";
-        unchangedMessage = "MoviePilot directories config already up to date";
+        mode = "directories";
+        payload = serializedDirectories;
       }
     );
 
     systemd.services.moviepilot-seed-media-servers = mkIf mediaServersConfigured (
-      mkSeedSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot media servers";
-        configKey = "MediaServers";
-        serializedConfig = serializedMediaServers;
-        updatedMessage = "MoviePilot media servers config updated";
-        unchangedMessage = "MoviePilot media servers config already up to date";
+        mode = "media-servers";
+        payload = serializedMediaServers;
       }
     );
 
     systemd.services.moviepilot-seed-storages = mkIf storagesConfigured (
-      mkSeedSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot storages";
-        configKey = "Storages";
-        serializedConfig = serializedStorages;
-        updatedMessage = "MoviePilot storages config updated";
-        unchangedMessage = "MoviePilot storages config already up to date";
+        mode = "storages";
+        payload = serializedStorages;
       }
     );
 
     systemd.services.moviepilot-seed-installed-plugins = mkIf installedPluginsConfigured (
-      mkSeedRawSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot installed plugin selection";
-        configKey = "UserInstalledPlugins";
-        serializedConfig = serializedInstalledPlugins;
-        updatedMessage = "MoviePilot installed plugin selection updated";
-        unchangedMessage = "MoviePilot installed plugin selection already up to date";
+        mode = "installed-plugins";
+        payload = serializedInstalledPlugins;
       }
     );
 
-    systemd.services.moviepilot-seed-plugin-configs = mkIf pluginConfigsConfigured {
-      description = "Seed MoviePilot plugin configs";
-      before = [ "moviepilot-backend.service" ];
-      requires =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
-      after =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
+    systemd.services.moviepilot-seed-plugin-configs = mkIf pluginConfigsConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot plugin configs";
+        mode = "plugin-configs";
+        payload = serializedPluginConfigs;
+        requires = optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
+        after = optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
+        environment = {
+          MOVIEPILOT_MANAGED_PLUGIN_CONFIGS_FILE = "${cfg.stateDir}/config/.managed-plugin-configs.json";
         };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-        import os
-
-        from app.db.systemconfig_oper import SystemConfigOper
-
-        desired = json.loads(${serializeJsonForPython serializedPluginConfigs})
-        resolved = {}
-
-        for plugin_id, entry in desired.items():
-            if not isinstance(entry, dict):
-                raise RuntimeError(
-                    f"MoviePilot pluginConfigs.{plugin_id} must be an attribute set"
-                )
-
-            plugin_config = dict(entry)
-            from_environment = plugin_config.pop("fromEnvironment", None) or {}
-            if not isinstance(from_environment, dict):
-                raise RuntimeError(
-                    f"MoviePilot pluginConfigs.{plugin_id}.fromEnvironment must be an attribute set"
-                )
-
-            for key, env_name in from_environment.items():
-                if env_name not in os.environ:
-                    raise RuntimeError(
-                        f"Missing environment variable {env_name} for MoviePilot pluginConfigs.{plugin_id}.{key}"
-                    )
-                plugin_config[key] = os.environ[env_name]
-
-            if plugin_config:
-                resolved[f"plugin.{plugin_id}"] = plugin_config
-
-        oper = SystemConfigOper()
-        current = {
-            key: value
-            for key, value in oper.all().items()
-            if key.startswith("plugin.")
-        }
-        changed = False
-
-        for key in sorted(set(current) - set(resolved)):
-            oper.delete(key)
-            changed = True
-
-        for key, value in resolved.items():
-            if current.get(key) != value:
-                oper.set(key, value)
-                changed = True
-
-        if changed:
-            print("MoviePilot plugin configs updated")
-        else:
-            print("MoviePilot plugin configs already up to date")
-        PY
-      '';
-    };
+      }
+    );
 
     systemd.services.moviepilot-seed-plugin-folders = mkIf pluginFoldersConfigured (
-      mkSeedRawSystemConfigService {
+      mkSeedApiService {
         description = "Seed MoviePilot plugin folders";
-        configKey = "PluginFolders";
-        serializedConfig = serializedPluginFolders;
-        updatedMessage = "MoviePilot plugin folders updated";
-        unchangedMessage = "MoviePilot plugin folders already up to date";
+        mode = "plugin-folders";
+        payload = serializedPluginFolders;
+        requires = optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
+        after = optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ];
       }
     );
 
-    systemd.services.moviepilot-seed-sites = mkIf sitesConfigured {
-      description = "Seed MoviePilot sites";
-      before = [ "moviepilot-backend.service" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
+    systemd.services.moviepilot-seed-site-auth = mkIf siteAuthConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot site auth config";
+        mode = "site-auth";
+        payload = serializedSiteAuth;
+      }
+    );
+
+    systemd.services.moviepilot-seed-sites = mkIf sitesConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot sites";
+        mode = "sites";
+        payload = serializedSites;
+        requires = optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ];
+        after = optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ];
+      }
+    );
+
+    systemd.services.moviepilot-seed-indexer-sites = mkIf indexerSitesConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot indexer site selection";
+        mode = "indexer-sites";
+        payload = serializedIndexerSites;
+        requires = optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+        after = optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      }
+    );
+
+    systemd.services.moviepilot-seed-rss-sites = mkIf rssSitesConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot RSS site selection";
+        mode = "rss-sites";
+        payload = serializedRssSites;
+        requires = optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+        after = optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
+      }
+    );
+
+    systemd.services.moviepilot-seed-subscriptions = mkIf subscriptionsConfigured (
+      mkSeedApiService {
+        description = "Seed MoviePilot subscriptions";
+        mode = "subscriptions";
+        payload = serializedSubscriptions;
+        requires =
+          optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
+          ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
+          ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
+        after =
+          optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
+          ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
+          ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
+        environment = {
+          MOVIEPILOT_MANAGED_SUBSCRIPTIONS_FILE = "${cfg.stateDir}/config/.managed-subscriptions.json";
         };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-        import os
-
-        from app.db.site_oper import SiteOper
-        from app.utils.string import StringUtils
-
-        desired = json.loads(${serializeJsonForPython serializedSites})
-        oper = SiteOper()
-        managed_fields = [
-            "name",
-            "domain",
-            "url",
-            "pri",
-            "rss",
-            "cookie",
-            "ua",
-            "apikey",
-            "token",
-            "proxy",
-            "filter",
-            "render",
-            "public",
-            "timeout",
-            "limit_interval",
-            "limit_count",
-            "limit_seconds",
-            "is_active",
-            "downloader",
-        ]
-        created = 0
-        updated = 0
-
-        for entry in desired:
-            from_environment = entry.pop("fromEnvironment", None) or {}
-            for key, env_name in from_environment.items():
-                if env_name not in os.environ:
-                    raise RuntimeError(
-                        f"Missing environment variable {env_name} for site {entry.get('domain', 'unknown')}.{key}"
-                    )
-                entry[key] = os.environ[env_name]
-
-            domain = entry.get("domain")
-            if not domain:
-                raise RuntimeError("MoviePilot site entry requires domain")
-
-            url = entry.get("url") or f"https://{domain}/"
-            scheme, netloc = StringUtils.get_url_netloc(url)
-            if not scheme or not netloc:
-                raise RuntimeError(f"Invalid MoviePilot site URL: {url}")
-            entry["url"] = f"{scheme}://{netloc}/"
-
-            inferred_domain = StringUtils.get_url_domain(entry["url"])
-            if inferred_domain and inferred_domain != domain:
-                raise RuntimeError(
-                    f"Configured site domain {domain} does not match URL domain {inferred_domain}"
-                )
-
-            if entry.get("name") is None:
-                entry["name"] = domain
-
-            if entry.get("public") is None:
-                entry["public"] = 0
-
-            payload = {
-                key: entry.get(key)
-                for key in managed_fields
-                if key in entry and entry.get(key) is not None
-            }
-            existing = oper.get_by_domain(domain)
-
-            if not existing:
-                ok, message = oper.add(**payload)
-                if not ok:
-                    raise RuntimeError(message)
-                created += 1
-                continue
-
-            current = {key: getattr(existing, key) for key in managed_fields}
-            if current != payload:
-                oper.update(existing.id, payload)
-                updated += 1
-
-        if created or updated:
-            print("MoviePilot sites config updated")
-        else:
-            print("MoviePilot sites config already up to date")
-        PY
-      '';
-    };
-
-    systemd.services.moviepilot-seed-site-auth = mkIf siteAuthConfigured {
-      description = "Seed MoviePilot site auth config";
-      before = [ "moviepilot-backend.service" ];
-      requires = [ "moviepilot-prepare.service" ];
-      after = [ "moviepilot-prepare.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
-        };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-        import os
-
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
-
-        desired = json.loads(${serializeJsonForPython serializedSiteAuth})
-        params = dict(desired.get("params") or {})
-        params_from_environment = desired.pop("paramsFromEnvironment", None) or {}
-
-        for key, env_name in params_from_environment.items():
-            if env_name not in os.environ:
-                raise RuntimeError(
-                    f"Missing environment variable {env_name} for MoviePilot siteAuth.params.{key}"
-                )
-            params[key] = os.environ[env_name]
-
-        desired["params"] = params
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.UserSiteAuthParams)
-        if current != desired:
-            oper.set(SystemConfigKey.UserSiteAuthParams, desired)
-            print("MoviePilot site auth config updated")
-        else:
-            print("MoviePilot site auth config already up to date")
-        PY
-      '';
-    };
-
-    systemd.services.moviepilot-seed-indexer-sites = mkIf indexerSitesConfigured {
-      description = "Seed MoviePilot indexer site selection";
-      before = [ "moviepilot-backend.service" ];
-      requires =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
-      after =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
-        };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-
-        from app.db.site_oper import SiteOper
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
-
-        desired_domains = json.loads(${serializeJsonForPython serializedIndexerSites})
-        site_oper = SiteOper()
-        resolved_ids = []
-        missing = []
-
-        for domain in desired_domains:
-            site = site_oper.get_by_domain(domain)
-            if not site:
-                missing.append(domain)
-                continue
-            resolved_ids.append(site.id)
-
-        if missing:
-            raise RuntimeError(
-                "MoviePilot indexerSites references unknown site domains: " + ", ".join(missing)
-            )
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.IndexerSites) or []
-        if current != resolved_ids:
-            oper.set(SystemConfigKey.IndexerSites, resolved_ids)
-            print("MoviePilot indexer site selection updated")
-        else:
-            print("MoviePilot indexer site selection already up to date")
-        PY
-      '';
-    };
-
-    systemd.services.moviepilot-seed-rss-sites = mkIf rssSitesConfigured {
-      description = "Seed MoviePilot RSS site selection";
-      before = [ "moviepilot-backend.service" ];
-      requires =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
-      after =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ];
-      environment = backendEnv;
-      serviceConfig =
-        {
-          Type = "oneshot";
-          WorkingDirectory = "${runtimeDir}/backend";
-          User = cfg.user;
-          Group = cfg.group;
-          UMask = "0027";
-        }
-        // configSeedHardening
-        // optionalAttrs (cfg.environmentFile != null) {
-          EnvironmentFile = cfg.environmentFile;
-        };
-      script = ''
-        set -euo pipefail
-
-        ${cfg.pythonPackage}/bin/python - <<'PY'
-        import json
-
-        from app.db.site_oper import SiteOper
-        from app.db.systemconfig_oper import SystemConfigOper
-        from app.schemas.types import SystemConfigKey
-
-        desired_domains = json.loads(${serializeJsonForPython serializedRssSites})
-        site_oper = SiteOper()
-        resolved_ids = []
-        missing = []
-
-        for domain in desired_domains:
-            site = site_oper.get_by_domain(domain)
-            if not site:
-                missing.append(domain)
-                continue
-            resolved_ids.append(site.id)
-
-        if missing:
-            raise RuntimeError(
-                "MoviePilot rssSites references unknown site domains: " + ", ".join(missing)
-            )
-
-        oper = SystemConfigOper()
-        current = oper.get(SystemConfigKey.RssSites) or []
-        if current != resolved_ids:
-            oper.set(SystemConfigKey.RssSites, resolved_ids)
-            print("MoviePilot RSS site selection updated")
-        else:
-            print("MoviePilot RSS site selection already up to date")
-        PY
-      '';
-    };
+      }
+    );
 
     systemd.services.moviepilot-backend = {
       description = "MoviePilot backend";
       wantedBy = [ "multi-user.target" ];
-      requires =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
-        ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
-        ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
-        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
-        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ]
-        ++ optionals pluginConfigsConfigured [ "moviepilot-seed-plugin-configs.service" ]
-        ++ optionals pluginFoldersConfigured [ "moviepilot-seed-plugin-folders.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
-        ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
-        ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
-        ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
-      after =
-        [ "moviepilot-prepare.service" ]
-        ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
-        ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
-        ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
-        ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
-        ++ optionals installedPluginsConfigured [ "moviepilot-seed-installed-plugins.service" ]
-        ++ optionals pluginConfigsConfigured [ "moviepilot-seed-plugin-configs.service" ]
-        ++ optionals pluginFoldersConfigured [ "moviepilot-seed-plugin-folders.service" ]
-        ++ optionals sitesConfigured [ "moviepilot-seed-sites.service" ]
-        ++ optionals siteAuthConfigured [ "moviepilot-seed-site-auth.service" ]
-        ++ optionals indexerSitesConfigured [ "moviepilot-seed-indexer-sites.service" ]
-        ++ optionals rssSitesConfigured [ "moviepilot-seed-rss-sites.service" ];
+      requires = [ "moviepilot-prepare.service" ];
+      after = [ "moviepilot-prepare.service" ];
       path = cfg.extraPackages;
       environment = backendEnv;
       serviceConfig = {
@@ -1866,11 +1734,11 @@ in
       requires = [
         "moviepilot-prepare.service"
         "moviepilot-backend.service"
-      ];
+      ] ++ frontendSeedServiceUnits;
       after = [
         "moviepilot-prepare.service"
         "moviepilot-backend.service"
-      ];
+      ] ++ frontendSeedServiceUnits;
       environment = frontendEnv;
       serviceConfig = {
         ExecStart = "${pkgs.nodejs_20}/bin/node service.js";
