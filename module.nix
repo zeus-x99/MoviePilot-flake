@@ -68,8 +68,35 @@ let
   pluginsManifestSource = "${pluginsPackage}/share/moviepilot/plugins-manifest";
   resourcesSourceDir = "${resourcesPackage}/share/moviepilot/resources";
   resourcesManifestSource = "${resourcesPackage}/share/moviepilot/resources-manifest";
+  postgresqlCfg = cfg.database.postgresql;
+  redisCfg = cfg.cache.redis;
+  apiSeedTokenConfigured = cfg.environmentFile != null || effectiveSettings ? API_TOKEN;
+  superuserPasswordSeedConfigured = cfg.environmentFile != null || effectiveSettings ? SUPERUSER_PASSWORD;
+  redisUrl = "redis://${redisCfg.host}:${toString redisCfg.port}/${toString redisCfg.database}";
+  managedDirectoryTmpfilesRules = builtins.concatLists (
+    map (
+      directory: [
+        "d ${directory.path} ${directory.mode} ${directory.user} ${directory.group} -"
+        "${if directory.recursive then "Z" else "z"} ${directory.path} ${directory.mode} ${directory.user} ${directory.group} -"
+      ]
+    ) cfg.managedDirectories
+  );
   defaultSettings = {
     AUTO_UPDATE_RESOURCE = false;
+  }
+  // optionalAttrs postgresqlCfg.enable {
+    DB_TYPE = "postgresql";
+    DB_POSTGRESQL_HOST = postgresqlCfg.host;
+    DB_POSTGRESQL_PORT = postgresqlCfg.port;
+    DB_POSTGRESQL_DATABASE = postgresqlCfg.database;
+    DB_POSTGRESQL_USERNAME = postgresqlCfg.user;
+  }
+  // optionalAttrs (postgresqlCfg.enable && postgresqlCfg.password != null) {
+    DB_POSTGRESQL_PASSWORD = postgresqlCfg.password;
+  }
+  // optionalAttrs redisCfg.enable {
+    CACHE_BACKEND_TYPE = "redis";
+    CACHE_BACKEND_URL = redisUrl;
   };
   effectiveSettings = defaultSettings // cfg.settings;
   scalarValueType = types.oneOf [
@@ -119,7 +146,8 @@ let
   pluginConfigsConfigured = cfg.pluginConfigs != null;
   pluginFoldersConfigured = cfg.pluginFolders != null;
   apiSeedConfigured =
-    downloadersConfigured
+    superuserPasswordSeedConfigured
+    || downloadersConfigured
     || directoriesConfigured
     || mediaServersConfigured
     || storagesConfigured
@@ -132,9 +160,9 @@ let
     || pluginConfigsConfigured
     || pluginFoldersConfigured;
   apiBaseUrl = "http://127.0.0.1:${toString cfg.backend.port}/api/v1";
-  apiSeedUsername = if effectiveSettings ? SUPERUSER then effectiveSettings.SUPERUSER else "admin";
   configuredSeedServiceUnits =
-    optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
+    optionals superuserPasswordSeedConfigured [ "moviepilot-seed-superuser-password.service" ]
+    ++ optionals downloadersConfigured [ "moviepilot-seed-downloaders.service" ]
     ++ optionals directoriesConfigured [ "moviepilot-seed-directories.service" ]
     ++ optionals mediaServersConfigured [ "moviepilot-seed-media-servers.service" ]
     ++ optionals storagesConfigured [ "moviepilot-seed-storages.service" ]
@@ -316,7 +344,6 @@ let
         backendEnv
         // {
           MOVIEPILOT_API_BASE_URL = apiBaseUrl;
-          MOVIEPILOT_API_USERNAME = apiSeedUsername;
         }
         // environment;
       serviceConfig =
@@ -540,6 +567,99 @@ in
           SUPERUSER = "admin";
           DB_TYPE = "sqlite";
         }
+      '';
+    };
+
+    database.postgresql = {
+      enable = mkEnableOption "use PostgreSQL as the MoviePilot database backend";
+
+      host = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+      };
+
+      port = mkOption {
+        type = types.port;
+        default = 5432;
+      };
+
+      database = mkOption {
+        type = types.str;
+        default = "moviepilot";
+      };
+
+      user = mkOption {
+        type = types.str;
+        default = "moviepilot";
+      };
+
+      password = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+      };
+    };
+
+    cache.redis = {
+      enable = mkEnableOption "use Redis as the MoviePilot cache backend";
+
+      host = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+      };
+
+      port = mkOption {
+        type = types.port;
+        default = 6379;
+      };
+
+      database = mkOption {
+        type = types.int;
+        default = 0;
+      };
+    };
+
+    managedDirectories = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            path = mkOption {
+              type = types.str;
+              example = "/data/shared/media";
+            };
+
+            user = mkOption {
+              type = types.str;
+              default = cfg.user;
+            };
+
+            group = mkOption {
+              type = types.str;
+              default = cfg.group;
+            };
+
+            mode = mkOption {
+              type = types.str;
+              default = "0755";
+            };
+
+            recursive = mkOption {
+              type = types.bool;
+              default = false;
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = literalExpression ''
+        [
+          {
+            path = "/data/shared/media";
+          }
+        ]
+      '';
+      description = ''
+        额外需要由 systemd-tmpfiles 创建并校正权限的目录。默认会使用
+        services.moviepilot.user/group 作为属主属组。
       '';
     };
 
@@ -1381,6 +1501,10 @@ in
         message = "services.moviepilot.sandboxRoot 必须是绝对路径";
       }
       {
+        assertion = lib.all (directory: lib.hasPrefix "/" directory.path) cfg.managedDirectories;
+        message = "services.moviepilot.managedDirectories[*].path 必须是绝对路径";
+      }
+      {
         assertion = !sandboxRootInStore;
         message = "services.moviepilot.sandboxRoot 不能位于 /nix/store；该路径只读，无法作为后端可写目录";
       }
@@ -1399,10 +1523,10 @@ in
         message = "services.moviepilot.playwrightBrowsersPath 若使用字符串，必须是绝对路径";
       }
       {
-        assertion = !apiSeedConfigured || cfg.environmentFile != null;
+        assertion = !apiSeedConfigured || apiSeedTokenConfigured;
         message =
-          "services.moviepilot 声明式配置通过 API 注入时需要设置 services.moviepilot.environmentFile，"
-          + "并通过其中的 SUPERUSER_PASSWORD 登录 MoviePilot API。";
+          "services.moviepilot 声明式配置通过 API 注入时需要提供 API_TOKEN，"
+          + "请设置 services.moviepilot.settings.API_TOKEN 或 services.moviepilot.environmentFile。";
       }
     ];
 
@@ -1435,7 +1559,7 @@ in
       "z ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "Z ${cfg.stateDir}/config 0750 ${cfg.user} ${cfg.group} -"
       "Z ${cfg.stateDir}/runtime 0750 ${cfg.user} ${cfg.group} -"
-    ];
+    ] ++ managedDirectoryTmpfilesRules;
 
     networking.firewall.allowedTCPPorts = optionals cfg.openFirewall [ publicPort ];
 
@@ -1585,6 +1709,14 @@ in
         ''}
       '';
     };
+
+    systemd.services.moviepilot-seed-superuser-password = mkIf superuserPasswordSeedConfigured (
+      mkSeedApiService {
+        description = "Sync MoviePilot superuser password";
+        mode = "superuser-password";
+        payload = { };
+      }
+    );
 
     systemd.services.moviepilot-seed-downloaders = mkIf downloadersConfigured (
       mkSeedApiService {

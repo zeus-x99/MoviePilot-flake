@@ -60,22 +60,20 @@ def quote_path(value):
 class MoviePilotApi:
     def __init__(self):
         base_url = os.environ.get("MOVIEPILOT_API_BASE_URL")
-        username = os.environ.get("MOVIEPILOT_API_USERNAME", "admin")
-        password = os.environ.get("SUPERUSER_PASSWORD")
+        api_token = os.environ.get("API_TOKEN")
         startup_timeout = int(os.environ.get("MOVIEPILOT_API_STARTUP_TIMEOUT", "180"))
         request_timeout = int(os.environ.get("MOVIEPILOT_API_TIMEOUT", "30"))
 
         if not base_url:
             raise MoviePilotApiError("缺少 MOVIEPILOT_API_BASE_URL")
-        if not password:
-            raise MoviePilotApiError("缺少 SUPERUSER_PASSWORD，API seed 需要管理员密码")
+        if not api_token:
+            raise MoviePilotApiError("缺少 API_TOKEN，API seed 需要 API_TOKEN")
 
         self.base_url = base_url.rstrip("/")
-        self.username = username
-        self.password = password
+        self.api_token = api_token
         self.startup_timeout = startup_timeout
         self.request_timeout = request_timeout
-        self.token = None
+        self.ready = False
 
     def wait_until_ready(self):
         deadline = time.monotonic() + self.startup_timeout
@@ -83,7 +81,8 @@ class MoviePilotApi:
 
         while time.monotonic() < deadline:
             try:
-                self.login()
+                self.request_json("GET", "/user/current", require_ready=False)
+                self.ready = True
                 return
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -93,11 +92,11 @@ class MoviePilotApi:
             f"等待 MoviePilot API 就绪超时，最后错误: {last_error}"
         )
 
-    def login(self):
+    def password_authenticates(self, username, password):
         form = urllib.parse.urlencode(
             {
-                "username": self.username,
-                "password": self.password,
+                "username": username,
+                "password": password,
             }
         ).encode()
 
@@ -112,25 +111,20 @@ class MoviePilotApi:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
-                payload = json.loads(response.read().decode() or "{}")
+            with urllib.request.urlopen(request, timeout=self.request_timeout):
+                return True
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             if exc.code == 401:
-                raise MoviePilotApiError("MoviePilot 管理员用户名或密码错误") from exc
+                return exc.headers.get("X-MFA-Required") == "true"
             raise MoviePilotApiError(
-                f"登录 MoviePilot API 失败: HTTP {exc.code}: {body}"
+                f"校验 MoviePilot 管理员密码失败: HTTP {exc.code}: {body}"
             ) from exc
         except urllib.error.URLError as exc:
             raise MoviePilotApiError(f"连接 MoviePilot API 失败: {exc}") from exc
 
-        token = payload.get("access_token")
-        if not token:
-            raise MoviePilotApiError(f"登录返回中缺少 access_token: {payload}")
-        self.token = token
-
-    def request_json(self, method, path, payload=NO_BODY, query=None, retry_on_401=True):
-        if self.token is None:
+    def request_json(self, method, path, payload=NO_BODY, query=None, require_ready=True):
+        if require_ready and not self.ready:
             self.wait_until_ready()
 
         url = f"{self.base_url}{path}"
@@ -146,7 +140,7 @@ class MoviePilotApi:
         data = None
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {self.token}",
+            "X-API-KEY": self.api_token,
         }
 
         if payload is not NO_BODY:
@@ -160,15 +154,6 @@ class MoviePilotApi:
                 raw = response.read().decode()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
-            if exc.code == 401 and retry_on_401:
-                self.login()
-                return self.request_json(
-                    method,
-                    path,
-                    payload=payload,
-                    query=query,
-                    retry_on_401=False,
-                )
             raise MoviePilotApiError(
                 f"请求 {method} {path} 失败: HTTP {exc.code}: {body}"
             ) from exc
@@ -178,6 +163,13 @@ class MoviePilotApi:
         if not raw:
             return None
         return json.loads(raw)
+
+
+def get_user_by_name(users, username):
+    for user in users:
+        if isinstance(user, dict) and user.get("name") == username:
+            return user
+    return None
 
 
 def expect_response_success(result, context):
@@ -718,6 +710,31 @@ def handle_plugin_configs(api, payload):
         print("MoviePilot plugin configs already up to date")
 
 
+def handle_superuser_password(api, _payload):
+    desired_password = os.environ.get("SUPERUSER_PASSWORD")
+    if not desired_password:
+        print("MoviePilot superuser password sync skipped")
+        return
+
+    superuser_name = os.environ.get("SUPERUSER", "admin")
+    if api.password_authenticates(superuser_name, desired_password):
+        print("MoviePilot superuser password already up to date")
+        return
+
+    users = api.request_json("GET", "/user/") or []
+    user = get_user_by_name(users, superuser_name)
+    if not user:
+        raise MoviePilotApiError(f"找不到超级管理员用户: {superuser_name}")
+
+    payload = dict(user)
+    payload["password"] = desired_password
+    expect_response_success(
+        api.request_json("PUT", "/user/", payload=payload),
+        f"同步管理员密码 {superuser_name}",
+    )
+    print("MoviePilot superuser password updated")
+
+
 def main():
     if len(sys.argv) != 2:
         raise MoviePilotApiError("用法: moviepilot-api-seed.py <mode>")
@@ -726,7 +743,9 @@ def main():
     payload = read_json_stdin()
     api = MoviePilotApi()
 
-    if mode == "downloaders":
+    if mode == "superuser-password":
+        handle_superuser_password(api, payload)
+    elif mode == "downloaders":
         handle_system_setting(
             api,
             payload,
