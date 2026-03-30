@@ -3,11 +3,11 @@
     "moviepilotFrontendSrc": {
       "flake": false,
       "locked": {
-        "lastModified": 1774621337,
-        "narHash": "sha256-TLwl6hh7FBnLsGoMgb4dTEabeoaJysCmQijaCuuoyfo=",
+        "lastModified": 1774846577,
+        "narHash": "sha256-EC08nTfjh4dJ7x7oFnIV/KW8A+cj0I2Or88L+44yKzw=",
         "owner": "jxxghp",
         "repo": "MoviePilot-Frontend",
-        "rev": "ead891ca2f2cc67ebbef003c50d9e43bf8c182c6",
+        "rev": "9c893abcdf1bbe80fd6dc9eb691904bb05ba468e",
         "type": "github"
       },
       "original": {
@@ -52,11 +52,11 @@
     "moviepilotSrc": {
       "flake": false,
       "locked": {
-        "lastModified": 1774620068,
-        "narHash": "sha256-sUTzIFzgyP0e4KZAQZMJDHEqYttHwPqMLKxJrVPXwaw=",
+        "lastModified": 1774842888,
+        "narHash": "sha256-w1WFoyDURqvunGOZwZsXn6pUG3bWgyocQcW/WgjaGqw=",
         "owner": "jxxghp",
         "repo": "MoviePilot",
-        "rev": "a8ecdc8206278f3d47197d6e4d4f90fd40d6aa61",
+        "rev": "cbff2fed17ae6c1d29f1d0d38d850644154fe621",
         "type": "github"
       },
       "original": {
