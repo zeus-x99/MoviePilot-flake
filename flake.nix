@@ -363,6 +363,32 @@
               })
             ];
           };
+          evalStorages = lib.nixosSystem {
+            inherit system;
+            modules = [
+              module
+              ({ ... }: {
+                services.moviepilot = {
+                  enable = true;
+                  environmentFile = "/run/secrets/moviepilot.env";
+                  storages = [
+                    {
+                      name = "OpenList";
+                      type = "alist";
+                      config = {
+                        host = "http://127.0.0.1:5244";
+                        username = "admin";
+                      };
+                      configFromEnvironment = {
+                        password = "OPENLIST_PASSWORD";
+                      };
+                    }
+                  ];
+                };
+                system.stateVersion = "25.05";
+              })
+            ];
+          };
           evalSandboxRoot = lib.nixosSystem {
             inherit system;
             modules = [
@@ -631,6 +657,12 @@
         assert lib.hasInfix "moviepilot-api-seed.py downloaders" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
         assert lib.hasInfix "qbittorrent" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
         assert lib.hasInfix "QBITTORRENT_PASSWORD" evalDownloaders.config.systemd.services.moviepilot-seed-downloaders.script;
+        assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-storages" ] evalStorages.config;
+        assert evalStorages.config.systemd.services.moviepilot-seed-storages.serviceConfig.EnvironmentFile == "/run/secrets/moviepilot.env";
+        assert lib.hasInfix "moviepilot-backend.service" (builtins.concatStringsSep " " evalStorages.config.systemd.services.moviepilot-seed-storages.requires);
+        assert lib.hasInfix "moviepilot-seed-storages.service" (builtins.concatStringsSep " " evalStorages.config.systemd.services.moviepilot-frontend.requires);
+        assert lib.hasInfix "moviepilot-api-seed.py storages" evalStorages.config.systemd.services.moviepilot-seed-storages.script;
+        assert lib.hasInfix "OPENLIST_PASSWORD" evalStorages.config.systemd.services.moviepilot-seed-storages.script;
         assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-installed-plugins" ] evalPlugins.config;
         assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-plugin-configs" ] evalPlugins.config;
         assert lib.hasAttrByPath [ "systemd" "services" "moviepilot-seed-plugin-folders" ] evalPlugins.config;
@@ -741,6 +773,65 @@
               echo "reserved settings assertion unexpectedly succeeded" >&2
               exit 1
             fi
+            PYTHONDONTWRITEBYTECODE=1 ${pkgs.python3}/bin/python <<'PY'
+            import importlib.util
+            import io
+            import json
+            import os
+            import sys
+
+            script_path = "${./nix/moviepilot-api-seed.py}"
+            spec = importlib.util.spec_from_file_location("moviepilot_api_seed", script_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            class DummyApi:
+                def __init__(self):
+                    self.ready = True
+                    self.posts = []
+
+                def request_json(self, method, path, payload=module.NO_BODY, query=None, require_ready=True):
+                    if method == "GET" and path == "/system/setting/Storages":
+                        return {"data": {"value": []}}
+                    if method == "POST" and path == "/system/setting/Storages":
+                        self.posts.append(payload)
+                        return {"success": True, "data": {}}
+                    raise AssertionError(f"unexpected API call: {method} {path}")
+
+            api = DummyApi()
+            module.MoviePilotApi = lambda: api
+            os.environ["OPENLIST_PASSWORD"] = "integration-test-storage-password"
+            sys.argv = ["moviepilot-api-seed.py", "storages"]
+            sys.stdin = io.StringIO(json.dumps([
+                {
+                    "name": "OpenList",
+                    "type": "alist",
+                    "config": {
+                        "host": "http://127.0.0.1:5244",
+                        "username": "admin",
+                    },
+                    "configFromEnvironment": {
+                        "password": "OPENLIST_PASSWORD",
+                    },
+                }
+            ]))
+
+            module.main()
+
+            assert len(api.posts) == 1, api.posts
+            posted = api.posts[0]
+            assert posted == [
+                {
+                    "name": "OpenList",
+                    "type": "alist",
+                    "config": {
+                        "host": "http://127.0.0.1:5244",
+                        "username": "admin",
+                        "password": "integration-test-storage-password",
+                    },
+                }
+            ], posted
+            PY
             touch "$out"
           '';
           update-upstream-script = pkgs.runCommand "moviepilot-update-upstream-script" {

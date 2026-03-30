@@ -717,6 +717,7 @@ def handle_superuser_password(api, _payload):
         return
 
     superuser_name = os.environ.get("SUPERUSER", "admin")
+    api.wait_until_ready()
     if api.password_authenticates(superuser_name, desired_password):
         print("MoviePilot superuser password already up to date")
         return
@@ -778,6 +779,7 @@ def main():
             "Storages",
             "MoviePilot storages config updated",
             "MoviePilot storages config already up to date",
+            resolve_config_env=True,
         )
     elif mode == "installed-plugins":
         handle_installed_plugins(api, payload)
